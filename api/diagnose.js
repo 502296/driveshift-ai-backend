@@ -78,8 +78,14 @@ When to stop driving:
       });
     }
 
+    // ✅ الحل الحقيقي هنا
+    const text =
+      data.output?.[0]?.content?.[0]?.text ||
+      data.output_text ||
+      "No diagnosis returned.";
+
     return res.status(200).json({
-      result: data.output_text || "No diagnosis returned.",
+      result: text,
     });
   } catch (error) {
     return res.status(500).json({
