@@ -1,56 +1,89 @@
 export default async function handler(req, res) {
   if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
+    return res.status(405).json({ result: "Method not allowed" });
   }
 
   try {
     const { issue, answers, isEnglish } = req.body;
 
-    const userInput = answers
-      .map(a => `${a.question}: ${a.answer}`)
-      .join(" | ");
+    const userInput = Array.isArray(answers)
+      ? answers.map((a) => `${a.question}: ${a.answer}`).join("\n")
+      : "No answers provided";
+
+    const language = isEnglish ? "English" : "Spanish";
 
     const prompt = `
-You are an expert AI car diagnostic assistant.
+You are DriveShift AI, a calm expert automotive diagnostic assistant.
 
-User issue: ${issue}
-Answers: ${userInput}
+The user selected this issue:
+${issue}
 
-Give a clear, professional diagnosis.
+The user answered:
+${userInput}
+
+Respond in ${language} only.
+
+Write like a professional mechanic and diagnostic engineer, not like ChatGPT.
 
 Rules:
-- Be calm and expert
-- No bullet points
-- No technical overload
-- Explain simply
-- Suggest next step
+- Keep it clear and practical.
+- Do not over-explain.
+- Do not scare the driver.
+- Do not say "Based on the information provided".
+- Do not use long paragraphs.
+- Do not mention AI, model, or system.
+- Give a confident but careful diagnosis.
+- If it may be unsafe, say so calmly.
+- Focus on the most likely cause first.
+- Explain why in simple terms.
+- Give the next best action.
+
+Format exactly like this:
+
+Likely issue:
+[one short sentence]
+
+Why it fits:
+[2-3 short sentences]
+
+What to do next:
+[2-3 practical steps]
+
+When to stop driving:
+[short safety advice if needed, otherwise say what to monitor]
 `;
 
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
       },
       body: JSON.stringify({
         model: "gpt-4o-mini",
-        messages: [
-          { role: "system", content: "You are a professional car diagnostic AI." },
-          { role: "user", content: prompt }
-        ],
-        temperature: 0.6
-      })
+        input: prompt,
+        temperature: 0.35,
+        max_output_tokens: 450,
+      }),
     });
 
     const data = await response.json();
 
-    const result =
-      data.choices?.[0]?.message?.content ||
-      "Unable to analyze right now.";
+    if (!response.ok) {
+      return res.status(500).json({
+        result:
+          language === "English"
+            ? "DriveShift could not complete the diagnosis right now. Please try again."
+            : "DriveShift no pudo completar el diagnóstico ahora. Inténtalo de nuevo.",
+      });
+    }
 
-    res.status(200).json({ result });
-
+    return res.status(200).json({
+      result: data.output_text || "No diagnosis returned.",
+    });
   } catch (error) {
-    res.status(500).json({ error: "Server error" });
+    return res.status(500).json({
+      result: "DriveShift had a connection issue. Please try again.",
+    });
   }
 }
