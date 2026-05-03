@@ -6,34 +6,45 @@ export default async function handler(req, res) {
   try {
     const { issue, answers, isEnglish } = req.body;
 
-    const userInput = Array.isArray(answers)
+    const userInput = Array.isArray(answers) && answers.length > 0
       ? answers.map((a) => `${a.question}: ${a.answer}`).join("\n")
-      : "No answers provided";
+      : "No quick-question answers provided.";
 
     const language = isEnglish ? "English" : "Spanish";
 
-    const prompt = `
-You are DriveShift AI, a calm expert automotive diagnostic assistant.
+    const possibleObdCode = String(issue || "").match(/\b[PCBU][0-9A-F]{4}\b/i);
+    const hasObdCode = Boolean(possibleObdCode);
+    const obdCode = hasObdCode ? possibleObdCode[0].toUpperCase() : "";
 
-The user selected this issue:
+    const prompt = `
+You are DriveShift, a calm expert automotive diagnostic assistant.
+
+User input:
 ${issue}
 
-The user answered:
+Quick-question answers:
 ${userInput}
+
+Detected OBD code:
+${hasObdCode ? obdCode : "None"}
 
 Respond in ${language} only.
 
-Write like a professional mechanic and diagnostic engineer, not like ChatGPT.
+If an OBD code is detected:
+Explain what the code usually means, the most common causes, how serious it is, and the next practical step.
+Do not treat the code alone as final proof. Explain that symptoms, vehicle model, and scan data still matter.
 
-Rules:
-- Keep it clear and practical.
+If no OBD code is detected:
+Use the issue and answers to diagnose the most likely problem.
+
+Style rules:
+- Write like a professional mechanic and diagnostic engineer.
+- Be calm, clear, and practical.
+- Do not sound like ChatGPT.
+- Do not say "Based on the information provided".
 - Do not over-explain.
 - Do not scare the driver.
-- Do not say "Based on the information provided".
-- Do not use long paragraphs.
 - Do not mention AI, model, or system.
-- Give a confident but careful diagnosis.
-- If it may be unsafe, say so calmly.
 - Focus on the most likely cause first.
 - Explain why in simple terms.
 - Give the next best action.
@@ -62,8 +73,8 @@ When to stop driving:
       body: JSON.stringify({
         model: "gpt-4o-mini",
         input: prompt,
-        temperature: 0.35,
-        max_output_tokens: 450,
+        temperature: 0.3,
+        max_output_tokens: 500,
       }),
     });
 
@@ -78,15 +89,12 @@ When to stop driving:
       });
     }
 
-    // ✅ الحل الحقيقي هنا
     const text =
       data.output?.[0]?.content?.[0]?.text ||
       data.output_text ||
       "No diagnosis returned.";
 
-    return res.status(200).json({
-      result: text,
-    });
+    return res.status(200).json({ result: text });
   } catch (error) {
     return res.status(500).json({
       result: "DriveShift had a connection issue. Please try again.",
