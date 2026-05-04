@@ -9,7 +9,13 @@ export default async function handler(req, res) {
 
     const safeIssue = String(issue || "").trim();
     const answerList = Array.isArray(answers) ? answers : [];
-    const answerCount = answerList.length;
+
+    const possibleObdCode = safeIssue.match(/\b[PCBU][0-9A-F]{4}\b/i);
+    const hasObdCode = Boolean(possibleObdCode);
+    const obdCode = hasObdCode ? possibleObdCode[0].toUpperCase() : "";
+
+    const realAnswerCount = countUserAnswers(answerList);
+    const shouldAskFollowUp = !hasObdCode && realAnswerCount < 3;
 
     const userInput =
       answerList.length > 0
@@ -22,16 +28,12 @@ export default async function handler(req, res) {
             .join("\n")
         : "No additional answers.";
 
-    const possibleObdCode = safeIssue.match(/\b[PCBU][0-9A-F]{4}\b/i);
-    const hasObdCode = Boolean(possibleObdCode);
-    const obdCode = hasObdCode ? possibleObdCode[0].toUpperCase() : "";
-
-    const shouldAskFollowUp = !hasObdCode && answerCount < 3;
-
     const prompt = `
 You are DriveShift Doctor, a calm senior automotive diagnostic mechanic.
 
-You lead the driver like a real mechanic, not like a chatbot.
+You are not a chatbot.
+You are a diagnostic guide.
+Your job is to lead the driver step by step before giving a final diagnosis.
 
 Language: ${lang === "es" ? "Spanish" : "English"}
 
@@ -44,20 +46,33 @@ ${userInput}
 Detected OBD code:
 ${hasObdCode ? obdCode : "None"}
 
+User answer count:
+${realAnswerCount}
+
 Mode:
 ${shouldAskFollowUp ? "follow_up" : "final"}
 
-Rules:
-If mode is follow_up, do not diagnose yet. Ask exactly one strong mechanic question that narrows the cause. Do not give repair steps. Do not give a conclusion. Do not mention possible causes unless absolutely necessary.
-If mode is final, give the most likely diagnosis, why it fits, and practical next steps.
-Sound calm, practical, and human.
-No markdown. No bullets. No numbered lists. No scary language. Do not mention AI.
+Critical behavior:
+If mode is follow_up, you must NOT give a report.
+If mode is follow_up, you must NOT give a likely cause.
+If mode is follow_up, you must ask exactly ONE practical mechanic question.
+The question must be different from previous questions.
+The question must narrow the diagnosis.
+The question should ask about timing, speed, acceleration, braking, idle, warning lights, noise, smell, temperature, or where the vibration is felt.
+Do not mention possible causes during follow_up.
+Do not say "not confirmed yet" in a lazy way except in the Likely issue field.
+If mode is final, give the most likely issue, why it fits, and practical next steps.
 
-Important:
-The first line must be exactly:
-Diagnosis status: ${shouldAskFollowUp ? "follow_up" : "final"}
+Style:
+Calm, premium, short, human.
+No markdown.
+No bullets.
+No numbered lists.
+No scary language.
+Do not mention AI.
+Do not say "Based on the information".
 
-Output exactly:
+Output exactly this format:
 
 Diagnosis status: ${shouldAskFollowUp ? "follow_up" : "final"}
 
@@ -71,10 +86,10 @@ Risk level:
 [High or Medium or Low]
 
 Likely issue:
-[if follow_up: Not confirmed yet. If final: short likely issue]
+[if follow_up: Still narrowing the issue. If final: short likely issue]
 
 Why it fits:
-[if follow_up: One short sentence explaining why the question matters. If final: short logic]
+[if follow_up: Explain why the next question matters in one short sentence. If final: short logic]
 
 What to do next:
 [if follow_up: one clear follow-up question only. If final: practical next steps]
@@ -92,8 +107,8 @@ When to stop driving:
       body: JSON.stringify({
         model: "gpt-4o",
         input: prompt,
-        temperature: 0.16,
-        max_output_tokens: 650,
+        temperature: 0.12,
+        max_output_tokens: 520,
       }),
     });
 
@@ -105,21 +120,7 @@ When to stop driving:
       });
     }
 
-    let text = "";
-
-    if (data.output_text) {
-      text = data.output_text;
-    } else if (Array.isArray(data.output)) {
-      for (const block of data.output) {
-        if (block?.content) {
-          for (const c of block.content) {
-            if (c?.text) text += c.text + "\n";
-          }
-        }
-      }
-    }
-
-    text = normalizeStatusLine(text.trim(), shouldAskFollowUp);
+    let text = extractText(data).trim();
 
     if (!text) {
       return res.status(200).json({
@@ -127,9 +128,8 @@ When to stop driving:
       });
     }
 
-    if (!text.toLowerCase().includes("diagnosis status:")) {
-      text = enhanceFallback(text, lang, shouldAskFollowUp);
-    }
+    text = normalizeStatusLine(text, shouldAskFollowUp);
+    text = ensureRequiredFormat(text, lang, shouldAskFollowUp);
 
     return res.status(200).json({ result: text });
   } catch (error) {
@@ -139,6 +139,33 @@ When to stop driving:
   }
 }
 
+function countUserAnswers(answerList) {
+  if (!Array.isArray(answerList)) return 0;
+
+  return answerList.filter((item) => {
+    const ans = String(item?.answer || "").trim();
+    return ans.length > 0;
+  }).length;
+}
+
+function extractText(data) {
+  if (data.output_text) return data.output_text;
+
+  let text = "";
+
+  if (Array.isArray(data.output)) {
+    for (const block of data.output) {
+      if (Array.isArray(block?.content)) {
+        for (const c of block.content) {
+          if (c?.text) text += c.text + "\n";
+        }
+      }
+    }
+  }
+
+  return text;
+}
+
 function normalizeStatusLine(text, shouldAskFollowUp) {
   if (!text) return "";
 
@@ -146,7 +173,7 @@ function normalizeStatusLine(text, shouldAskFollowUp) {
 
   text = text.replace(
     /Diagnosis status:\s*\n\s*(follow_up|final)/i,
-    `Diagnosis status: $1`
+    "Diagnosis status: $1"
   );
 
   if (!/Diagnosis status:\s*(follow_up|final)/i.test(text)) {
@@ -155,9 +182,32 @@ function normalizeStatusLine(text, shouldAskFollowUp) {
 
   if (shouldAskFollowUp) {
     text = text.replace(/Diagnosis status:\s*final/i, "Diagnosis status: follow_up");
+  } else {
+    text = text.replace(/Diagnosis status:\s*follow_up/i, "Diagnosis status: final");
   }
 
   return text.trim();
+}
+
+function ensureRequiredFormat(text, lang, shouldAskFollowUp) {
+  const required = [
+    "Diagnosis status:",
+    "Voice summary:",
+    "Confidence:",
+    "Risk level:",
+    "Likely issue:",
+    "Why it fits:",
+    "What to do next:",
+    "When to stop driving:",
+  ];
+
+  const ok = required.every((label) =>
+    text.toLowerCase().includes(label.toLowerCase())
+  );
+
+  if (ok) return text;
+
+  return fallback(lang, shouldAskFollowUp);
 }
 
 function fallback(lang = "en", shouldAskFollowUp = true) {
@@ -168,7 +218,7 @@ function fallback(lang = "en", shouldAskFollowUp = true) {
 Diagnosis status: ${status}
 
 Voice summary:
-Necesito una respuesta más para reducir la causa correctamente.
+Voy a reducir esto paso a paso antes de confirmar la causa.
 
 Confidence:
 55
@@ -177,10 +227,10 @@ Risk level:
 Medium
 
 Likely issue:
-${shouldAskFollowUp ? "Not confirmed yet." : "A drivability issue is likely."}
+${shouldAskFollowUp ? "Still narrowing the issue." : "A drivability issue is likely."}
 
 Why it fits:
-The pattern needs one more detail before confirming the cause.
+The next detail will help separate engine load, braking, and speed-related behavior.
 
 What to do next:
 Does it happen more during acceleration, braking, idling, going uphill, or at a steady speed?
@@ -194,7 +244,7 @@ Stop driving if the vehicle shakes badly, loses power, overheats, smokes, or fee
 Diagnosis status: ${status}
 
 Voice summary:
-I need one more answer to narrow this down properly.
+I’ll narrow this down step by step before calling the cause.
 
 Confidence:
 55
@@ -203,79 +253,15 @@ Risk level:
 Medium
 
 Likely issue:
-${shouldAskFollowUp ? "Not confirmed yet." : "A drivability issue is likely."}
+${shouldAskFollowUp ? "Still narrowing the issue." : "A drivability issue is likely."}
 
 Why it fits:
-The pattern needs one more detail before confirming the cause.
+The next detail will help separate engine load, braking, and speed-related behavior.
 
 What to do next:
 Does it happen more during acceleration, braking, idling, going uphill, or at a steady speed?
 
 When to stop driving:
 Stop driving if the vehicle shakes badly, loses power, overheats, smokes, or feels unsafe.
-`;
-}
-
-function enhanceFallback(text, lang = "en", shouldAskFollowUp = true) {
-  const status = shouldAskFollowUp ? "follow_up" : "final";
-
-  if (lang === "es") {
-    return `
-Diagnosis status: ${status}
-
-Voice summary:
-Voy a reducir la causa paso a paso.
-
-Confidence:
-60
-
-Risk level:
-Medium
-
-Likely issue:
-${shouldAskFollowUp ? "Not confirmed yet." : text}
-
-Why it fits:
-The symptom pattern matters before confirming the cause.
-
-What to do next:
-${
-  shouldAskFollowUp
-    ? "Does it happen more during acceleration, braking, idling, going uphill, or at a steady speed?"
-    : "Start with the simple checks first, then inspect professionally if it continues."
-}
-
-When to stop driving:
-Stop driving if the vehicle feels unsafe, loses power, overheats, smokes, or warning lights flash.
-`;
-  }
-
-  return `
-Diagnosis status: ${status}
-
-Voice summary:
-I’ll narrow this down step by step.
-
-Confidence:
-60
-
-Risk level:
-Medium
-
-Likely issue:
-${shouldAskFollowUp ? "Not confirmed yet." : text}
-
-Why it fits:
-The symptom pattern matters before confirming the cause.
-
-What to do next:
-${
-  shouldAskFollowUp
-    ? "Does it happen more during acceleration, braking, idling, going uphill, or at a steady speed?"
-    : "Start with the simple checks first, then inspect professionally if it continues."
-}
-
-When to stop driving:
-Stop driving if the vehicle feels unsafe, loses power, overheats, smokes, or warning lights flash.
 `;
 }
