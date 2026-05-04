@@ -8,81 +8,58 @@ export default async function handler(req, res) {
     const lang = language === "es" ? "es" : "en";
 
     const safeIssue = String(issue || "").trim();
-
     const answerList = Array.isArray(answers) ? answers : [];
     const answerCount = answerList.length;
 
     const userInput =
       answerList.length > 0
-        ? answerList.map((a, index) => {
-            const q = String(a.question || `Question ${index + 1}`).trim();
-            const ans = String(a.answer || "").trim();
-            return `${q}: ${ans}`;
-          }).join("\n")
+        ? answerList
+            .map((a, index) => {
+              const q = String(a.question || `Question ${index + 1}`).trim();
+              const ans = String(a.answer || "").trim();
+              return `${q}: ${ans}`;
+            })
+            .join("\n")
         : "No additional answers.";
 
     const possibleObdCode = safeIssue.match(/\b[PCBU][0-9A-F]{4}\b/i);
     const hasObdCode = Boolean(possibleObdCode);
     const obdCode = hasObdCode ? possibleObdCode[0].toUpperCase() : "";
 
-    // DriveShift should guide the user before final diagnosis.
-    // 1st message = ask follow-up
-    // 2nd answer = ask one more focused follow-up
-    // 3rd answer = final diagnosis
     const shouldAskFollowUp = !hasObdCode && answerCount < 3;
 
     const prompt = `
-You are DriveShift Doctor — a calm, senior automotive diagnostic mechanic.
+You are DriveShift Doctor, a calm senior automotive diagnostic mechanic.
 
-You are not a chatbot.
-You are not a generic AI assistant.
-You are a digital mechanic that leads the driver through diagnosis.
+You lead the driver like a real mechanic, not like a chatbot.
 
-LANGUAGE:
-${lang === "es" ? "Spanish" : "English"}
+Language: ${lang === "es" ? "Spanish" : "English"}
 
-ORIGINAL USER PROBLEM:
+Original problem:
 ${safeIssue}
 
-CONVERSATION SO FAR:
+Conversation so far:
 ${userInput}
 
-DETECTED OBD CODE:
+Detected OBD code:
 ${hasObdCode ? obdCode : "None"}
 
-DIAGNOSTIC MODE:
-${shouldAskFollowUp ? "Ask follow-up question" : "Final diagnosis"}
+Mode:
+${shouldAskFollowUp ? "follow_up" : "final"}
 
-IMPORTANT BEHAVIOR:
-If DIAGNOSTIC MODE is "Ask follow-up question":
-Ask exactly ONE useful mechanic question.
-The question must narrow the cause.
-Do not repeat a question already asked.
-Do not give repair steps yet.
-Do not give a final diagnosis yet.
-Do not say "More details are needed" in a lazy way.
-Ask like a real mechanic.
+Rules:
+If mode is follow_up, do not diagnose yet. Ask exactly one strong mechanic question that narrows the cause. Do not give repair steps. Do not give a conclusion. Do not mention possible causes unless absolutely necessary.
+If mode is final, give the most likely diagnosis, why it fits, and practical next steps.
+Sound calm, practical, and human.
+No markdown. No bullets. No numbered lists. No scary language. Do not mention AI.
 
-If DIAGNOSTIC MODE is "Final diagnosis":
-Give the most likely issue.
-Explain why it fits.
-Give practical next steps.
-Be calm, clear, and useful.
+Important:
+The first line must be exactly:
+Diagnosis status: ${shouldAskFollowUp ? "follow_up" : "final"}
 
-STYLE RULES:
-No markdown.
-No bullet points.
-No numbered lists.
-No scary language.
-No "Based on the information".
-No "as an AI".
-No long explanation.
-Sound like a real mechanic.
+Output exactly:
 
-OUTPUT FORMAT MUST BE EXACTLY:
-
-Diagnosis status:
-[follow_up or final]
+Diagnosis status: ${shouldAskFollowUp ? "follow_up" : "final"}
 
 Voice summary:
 [short natural mechanic speech]
@@ -94,13 +71,13 @@ Risk level:
 [High or Medium or Low]
 
 Likely issue:
-[short direct answer]
+[if follow_up: Not confirmed yet. If final: short likely issue]
 
 Why it fits:
-[short explanation]
+[if follow_up: One short sentence explaining why the question matters. If final: short logic]
 
 What to do next:
-[one follow-up question if follow_up, or practical steps if final]
+[if follow_up: one clear follow-up question only. If final: practical next steps]
 
 When to stop driving:
 [clear safety advice]
@@ -115,7 +92,7 @@ When to stop driving:
       body: JSON.stringify({
         model: "gpt-4o",
         input: prompt,
-        temperature: 0.18,
+        temperature: 0.16,
         max_output_tokens: 650,
       }),
     });
@@ -142,7 +119,7 @@ When to stop driving:
       }
     }
 
-    text = text.trim();
+    text = normalizeStatusLine(text.trim(), shouldAskFollowUp);
 
     if (!text) {
       return res.status(200).json({
@@ -150,7 +127,7 @@ When to stop driving:
       });
     }
 
-    if (!text.toLowerCase().includes("diagnosis status")) {
+    if (!text.toLowerCase().includes("diagnosis status:")) {
       text = enhanceFallback(text, lang, shouldAskFollowUp);
     }
 
@@ -162,16 +139,36 @@ When to stop driving:
   }
 }
 
+function normalizeStatusLine(text, shouldAskFollowUp) {
+  if (!text) return "";
+
+  const wanted = shouldAskFollowUp ? "follow_up" : "final";
+
+  text = text.replace(
+    /Diagnosis status:\s*\n\s*(follow_up|final)/i,
+    `Diagnosis status: $1`
+  );
+
+  if (!/Diagnosis status:\s*(follow_up|final)/i.test(text)) {
+    text = `Diagnosis status: ${wanted}\n\n${text}`;
+  }
+
+  if (shouldAskFollowUp) {
+    text = text.replace(/Diagnosis status:\s*final/i, "Diagnosis status: follow_up");
+  }
+
+  return text.trim();
+}
+
 function fallback(lang = "en", shouldAskFollowUp = true) {
   const status = shouldAskFollowUp ? "follow_up" : "final";
 
   if (lang === "es") {
     return `
-Diagnosis status:
-${status}
+Diagnosis status: ${status}
 
 Voice summary:
-Necesito una respuesta más para reducir la causa.
+Necesito una respuesta más para reducir la causa correctamente.
 
 Confidence:
 55
@@ -180,10 +177,10 @@ Risk level:
 Medium
 
 Likely issue:
-${shouldAskFollowUp ? "The cause is not confirmed yet." : "A mechanical or drivability issue is likely."}
+${shouldAskFollowUp ? "Not confirmed yet." : "A drivability issue is likely."}
 
 Why it fits:
-The symptom needs one more detail to narrow the diagnosis.
+The pattern needs one more detail before confirming the cause.
 
 What to do next:
 Does it happen more during acceleration, braking, idling, going uphill, or at a steady speed?
@@ -194,8 +191,7 @@ Stop driving if the vehicle shakes badly, loses power, overheats, smokes, or fee
   }
 
   return `
-Diagnosis status:
-${status}
+Diagnosis status: ${status}
 
 Voice summary:
 I need one more answer to narrow this down properly.
@@ -207,10 +203,10 @@ Risk level:
 Medium
 
 Likely issue:
-${shouldAskFollowUp ? "The cause is not confirmed yet." : "A mechanical or drivability issue is likely."}
+${shouldAskFollowUp ? "Not confirmed yet." : "A drivability issue is likely."}
 
 Why it fits:
-The symptom needs one more detail to narrow the diagnosis.
+The pattern needs one more detail before confirming the cause.
 
 What to do next:
 Does it happen more during acceleration, braking, idling, going uphill, or at a steady speed?
@@ -225,8 +221,7 @@ function enhanceFallback(text, lang = "en", shouldAskFollowUp = true) {
 
   if (lang === "es") {
     return `
-Diagnosis status:
-${status}
+Diagnosis status: ${status}
 
 Voice summary:
 Voy a reducir la causa paso a paso.
@@ -238,10 +233,10 @@ Risk level:
 Medium
 
 Likely issue:
-${shouldAskFollowUp ? "The cause is not confirmed yet." : text}
+${shouldAskFollowUp ? "Not confirmed yet." : text}
 
 Why it fits:
-The symptom suggests a vehicle issue, but the pattern matters.
+The symptom pattern matters before confirming the cause.
 
 What to do next:
 ${
@@ -256,8 +251,7 @@ Stop driving if the vehicle feels unsafe, loses power, overheats, smokes, or war
   }
 
   return `
-Diagnosis status:
-${status}
+Diagnosis status: ${status}
 
 Voice summary:
 I’ll narrow this down step by step.
@@ -269,10 +263,10 @@ Risk level:
 Medium
 
 Likely issue:
-${shouldAskFollowUp ? "The cause is not confirmed yet." : text}
+${shouldAskFollowUp ? "Not confirmed yet." : text}
 
 Why it fits:
-The symptom suggests a vehicle issue, but the pattern matters.
+The symptom pattern matters before confirming the cause.
 
 What to do next:
 ${
