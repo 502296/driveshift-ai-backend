@@ -15,7 +15,10 @@ export default async function handler(req, res) {
     const obdCode = hasObdCode ? possibleObdCode[0].toUpperCase() : "";
 
     const realAnswerCount = countUserAnswers(answerList);
-    const shouldAskFollowUp = !hasObdCode && realAnswerCount < 3;
+
+    // First free-text message = follow-up.
+    // After user answers follow-up = final report.
+    const shouldAskFollowUp = !hasObdCode && realAnswerCount <= 1;
 
     const userInput =
       answerList.length > 0
@@ -31,9 +34,7 @@ export default async function handler(req, res) {
     const prompt = `
 You are DriveShift Doctor, a calm senior automotive diagnostic mechanic.
 
-You are not a chatbot.
-You are a diagnostic guide.
-Your job is to lead the driver step by step before giving a final diagnosis.
+You guide the driver like a real mechanic.
 
 Language: ${lang === "es" ? "Spanish" : "English"}
 
@@ -46,31 +47,25 @@ ${userInput}
 Detected OBD code:
 ${hasObdCode ? obdCode : "None"}
 
-User answer count:
-${realAnswerCount}
-
 Mode:
 ${shouldAskFollowUp ? "follow_up" : "final"}
 
-Critical behavior:
-If mode is follow_up, you must NOT give a report.
-If mode is follow_up, you must NOT give a likely cause.
-If mode is follow_up, you must ask exactly ONE practical mechanic question.
-The question must be different from previous questions.
-The question must narrow the diagnosis.
-The question should ask about timing, speed, acceleration, braking, idle, warning lights, noise, smell, temperature, or where the vibration is felt.
-Do not mention possible causes during follow_up.
-Do not say "not confirmed yet" in a lazy way except in the Likely issue field.
-If mode is final, give the most likely issue, why it fits, and practical next steps.
+If mode is follow_up:
+Ask exactly ONE practical mechanic question.
+Do not diagnose yet.
+Do not give likely causes.
+Do not give repair steps.
+The question must narrow the issue.
+
+If mode is final:
+Give the most likely issue, why it fits, and practical next steps.
 
 Style:
-Calm, premium, short, human.
+Calm, short, practical, premium.
 No markdown.
 No bullets.
 No numbered lists.
-No scary language.
 Do not mention AI.
-Do not say "Based on the information".
 
 Output exactly this format:
 
@@ -89,7 +84,7 @@ Likely issue:
 [if follow_up: Still narrowing the issue. If final: short likely issue]
 
 Why it fits:
-[if follow_up: Explain why the next question matters in one short sentence. If final: short logic]
+[short explanation]
 
 What to do next:
 [if follow_up: one clear follow-up question only. If final: practical next steps]
@@ -107,7 +102,7 @@ When to stop driving:
       body: JSON.stringify({
         model: "gpt-4o",
         input: prompt,
-        temperature: 0.12,
+        temperature: 0.1,
         max_output_tokens: 520,
       }),
     });
@@ -218,7 +213,7 @@ function fallback(lang = "en", shouldAskFollowUp = true) {
 Diagnosis status: ${status}
 
 Voice summary:
-Voy a reducir esto paso a paso antes de confirmar la causa.
+Voy a reducir esto paso a paso.
 
 Confidence:
 55
@@ -230,10 +225,12 @@ Likely issue:
 ${shouldAskFollowUp ? "Still narrowing the issue." : "A drivability issue is likely."}
 
 Why it fits:
-The next detail will help separate engine load, braking, and speed-related behavior.
+This detail helps separate speed, load, and engine behavior.
 
 What to do next:
-Does it happen more during acceleration, braking, idling, going uphill, or at a steady speed?
+${shouldAskFollowUp
+  ? "Does it happen only when accelerating, or also when you hold a steady speed?"
+  : "Start with basic checks, then inspect professionally if it continues."}
 
 When to stop driving:
 Stop driving if the vehicle shakes badly, loses power, overheats, smokes, or feels unsafe.
@@ -244,7 +241,7 @@ Stop driving if the vehicle shakes badly, loses power, overheats, smokes, or fee
 Diagnosis status: ${status}
 
 Voice summary:
-I’ll narrow this down step by step before calling the cause.
+I’ll narrow this down step by step.
 
 Confidence:
 55
@@ -256,10 +253,12 @@ Likely issue:
 ${shouldAskFollowUp ? "Still narrowing the issue." : "A drivability issue is likely."}
 
 Why it fits:
-The next detail will help separate engine load, braking, and speed-related behavior.
+This detail helps separate speed, load, and engine behavior.
 
 What to do next:
-Does it happen more during acceleration, braking, idling, going uphill, or at a steady speed?
+${shouldAskFollowUp
+  ? "Does it happen only when accelerating, or also when you hold a steady speed?"
+  : "Start with basic checks, then inspect professionally if it continues."}
 
 When to stop driving:
 Stop driving if the vehicle shakes badly, loses power, overheats, smokes, or feels unsafe.
