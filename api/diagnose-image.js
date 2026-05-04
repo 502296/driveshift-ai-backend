@@ -4,46 +4,36 @@ export default async function handler(req, res) {
   }
 
   try {
-    const {
-      imageBase64,
-      mimeType,
-      detectedText,
-      isEnglish
-    } = req.body;
+    const { imageBase64 } = req.body;
 
-    const language = isEnglish ? "English" : "Spanish";
+    if (!imageBase64) {
+      return res.status(400).json({ result: "No image provided" });
+    }
 
     const prompt = `
-You are DriveShift, an expert automotive diagnostic system.
+You are DriveShift, an expert automotive diagnostic AI.
 
-You are analyzing a REAL dashboard warning light image from a car.
+Analyze this dashboard warning light image.
 
-Detected OCR text (may be wrong):
-${detectedText || "None"}
+Identify:
+- What warning light is shown
+- What it usually means
+- The most likely cause
+- What the driver should do next
 
-Instructions:
-- Identify the warning light from the IMAGE (not just text).
-- If text is unclear, rely on visual reasoning.
-- Be practical, calm, and precise.
-- Focus on the most likely issue.
-- Do not guess randomly.
-- Do not mention AI or uncertainty.
-
-Respond in ${language}.
-
-Format exactly:
+Respond in this format:
 
 Likely issue:
-[one short sentence]
+[short answer]
 
 Why it fits:
-[2-3 short sentences]
+[clear explanation]
 
 What to do next:
-[2-3 practical steps]
+[practical steps]
 
 When to stop driving:
-[clear safety advice]
+[safety advice]
 `;
 
     const response = await fetch("https://api.openai.com/v1/responses", {
@@ -53,38 +43,24 @@ When to stop driving:
         Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
       },
       body: JSON.stringify({
-        model: "gpt-4o",
+        model: "gpt-4.1",
         input: [
           {
             role: "user",
             content: [
-              {
-                type: "input_text",
-                text: prompt,
-              },
+              { type: "input_text", text: prompt },
               {
                 type: "input_image",
-                image_base64: imageBase64,
-                mime_type: mimeType || "image/jpeg",
+                image_url: `data:image/jpeg;base64,${imageBase64}`,
               },
             ],
           },
         ],
-        temperature: 0.2,
-        max_output_tokens: 600,
+        max_output_tokens: 500,
       }),
     });
 
     const data = await response.json();
-
-    if (!response.ok) {
-      return res.status(500).json({
-        result:
-          language === "English"
-            ? "DriveShift could not analyze the image right now."
-            : "DriveShift no pudo analizar la imagen ahora.",
-      });
-    }
 
     const text =
       data.output?.[0]?.content?.[0]?.text ||
@@ -92,10 +68,9 @@ When to stop driving:
       "No diagnosis returned.";
 
     return res.status(200).json({ result: text });
-
-  } catch (error) {
+  } catch (err) {
     return res.status(500).json({
-      result: "DriveShift had a connection issue. Please try again.",
+      result: "DriveShift image analysis failed.",
     });
   }
 }
