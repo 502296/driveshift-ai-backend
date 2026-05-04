@@ -4,64 +4,58 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { issue, answers } = req.body;
+    const { issue, answers, language } = req.body;
 
     const userInput =
       Array.isArray(answers) && answers.length > 0
         ? answers.map((a) => `${a.question}: ${a.answer}`).join("\n")
         : "No additional answers.";
 
-    // 🔥 Detect OBD code
     const possibleObdCode = String(issue || "").match(/\b[PCBU][0-9A-F]{4}\b/i);
     const hasObdCode = Boolean(possibleObdCode);
     const obdCode = hasObdCode ? possibleObdCode[0].toUpperCase() : "";
 
-    // =========================
-    // 🧠 LEVEL 6 PROMPT
-    // =========================
+    const isFreeText =
+      !hasObdCode &&
+      String(issue || "").length > 8 &&
+      (!answers || answers.length <= 1);
+
     const prompt = `
-You are DriveShift Doctor — a calm, highly experienced automotive diagnostic expert.
+You are DriveShift Doctor — a calm, experienced digital mechanic.
 
-You think like a master mechanic, not a chatbot.
+You do NOT act like a chatbot.
+You act like a real mechanic talking to a driver.
 
-========================
-USER INPUT
-========================
-Issue:
+USER INPUT:
 ${issue}
 
-Extra details:
+EXTRA DETAILS:
 ${userInput}
 
-Detected OBD code:
+DETECTED OBD CODE:
 ${hasObdCode ? obdCode : "None"}
 
-========================
-HOW YOU SHOULD THINK
-========================
-- Prioritize the most likely mechanical cause
-- Connect symptoms logically
-- If OBD exists → explain what it usually means but do not rely on it alone
-- Avoid guessing multiple causes
-- Give practical, realistic advice
-- Keep explanation simple but expert-level
+LANGUAGE:
+${language === "es" ? "Spanish" : "English"}
 
-========================
-STRICT RULES
-========================
-- English only
-- No markdown
-- No bullet points
-- No lists
-- No AI references
-- No "Based on the information"
-- No over-explaining
-- No fear language
-- Sound like a real mechanic
+IMPORTANT BEHAVIOR:
+- If the user only described a general symptom and details are missing, do NOT jump to a final diagnosis.
+- First ask 1 or 2 smart follow-up questions like a real mechanic.
+- If there is enough detail or an OBD code, give the diagnosis.
+- Stay short, calm, confident, and practical.
+- No markdown.
+- No bullet points.
+- No scary language.
+- Do not say "Based on the information".
+- Do not mention AI.
 
-========================
-OUTPUT FORMAT (MANDATORY)
-========================
+VOICE SUMMARY RULE:
+Give a short spoken mechanic-style summary, not the whole report.
+
+OUTPUT FORMAT:
+
+Voice summary:
+[short natural mechanic speech]
 
 Confidence:
 [number 0-100]
@@ -70,16 +64,16 @@ Risk level:
 [High or Medium or Low]
 
 Likely issue:
-[short direct sentence]
+[If not enough info, say: More details are needed before a final diagnosis.]
 
 Why it fits:
-[2 short clear sentences explaining logic]
+[short explanation]
 
 What to do next:
-[2 practical real-world steps]
+[If details are missing, ask 1 or 2 clear follow-up questions. If enough detail, give practical steps.]
 
 When to stop driving:
-[clear safety advice or when safe to continue]
+[clear safety advice]
 `;
 
     const response = await fetch("https://api.openai.com/v1/responses", {
@@ -91,20 +85,17 @@ When to stop driving:
       body: JSON.stringify({
         model: "gpt-4o",
         input: prompt,
-        temperature: 0.25, // 🔥 calmer + smarter
-        max_output_tokens: 600,
+        temperature: 0.28,
+        max_output_tokens: 650,
       }),
     });
 
     const data = await response.json();
 
     if (!response.ok) {
-      return res.status(500).json({ result: fallback() });
+      return res.status(500).json({ result: fallback(language) });
     }
 
-    // =========================
-    // 🔥 SMART EXTRACTION
-    // =========================
     let text = "";
 
     if (data.output_text) {
@@ -113,9 +104,7 @@ When to stop driving:
       for (const block of data.output) {
         if (block?.content) {
           for (const c of block.content) {
-            if (c?.text) {
-              text += c.text + "\n";
-            }
+            if (c?.text) text += c.text + "\n";
           }
         }
       }
@@ -124,59 +113,79 @@ When to stop driving:
     text = text.trim();
 
     if (!text) {
-      return res.status(200).json({ result: fallback() });
+      return res.status(200).json({ result: fallback(language) });
     }
 
-    // =========================
-    // 🔥 ENSURE FORMAT EXISTS
-    // =========================
-    if (!text.toLowerCase().includes("confidence")) {
-      return res.status(200).json({
-        result: enhanceFallback(text),
-      });
+    if (!text.toLowerCase().includes("voice summary")) {
+      text = enhanceFallback(text, language);
     }
 
     return res.status(200).json({ result: text });
-
   } catch (error) {
     return res.status(500).json({
-      result: fallback(),
+      result: fallback(req.body?.language),
     });
   }
 }
 
-// =========================
-// 🔥 SMART FALLBACK
-// =========================
-function fallback() {
-  return `
+function fallback(language = "en") {
+  if (language === "es") {
+    return `
+Voice summary:
+Bien, necesito un poco más de información antes de darte un diagnóstico final.
+
 Confidence:
-65
+55
 
 Risk level:
 Medium
 
 Likely issue:
-Unable to determine exact issue.
+More details are needed before a final diagnosis.
 
 Why it fits:
-The system could not fully process the input.
+The symptom needs more context before narrowing the cause.
 
 What to do next:
-Retry with clearer symptoms or inspect basic components.
+When does it happen, and does it change with speed, braking, or acceleration?
 
 When to stop driving:
-Stop if warning lights appear or driving feels unsafe.
+Stop driving if the vehicle shakes badly, loses power, overheats, smokes, or feels unsafe.
+`;
+  }
+
+  return `
+Voice summary:
+Alright, I need a little more detail before calling this one.
+
+Confidence:
+55
+
+Risk level:
+Medium
+
+Likely issue:
+More details are needed before a final diagnosis.
+
+Why it fits:
+The symptom needs more context before narrowing the cause.
+
+What to do next:
+When does it happen, and does it change with speed, braking, or acceleration?
+
+When to stop driving:
+Stop driving if the vehicle shakes badly, loses power, overheats, smokes, or feels unsafe.
 `;
 }
 
-// =========================
-// 🔥 ENHANCE PARTIAL RESPONSE
-// =========================
-function enhanceFallback(text) {
-  return `
+function enhanceFallback(text, language = "en") {
+  if (language === "es") {
+    return `
+Voice summary:
+Bien, esto necesita más detalles antes de confirmar la causa.
+
 Confidence:
-70
+65
 
 Risk level:
 Medium
@@ -185,12 +194,36 @@ Likely issue:
 ${text}
 
 Why it fits:
-The symptoms suggest a likely mechanical issue.
+The symptom suggests a possible vehicle issue, but more context is needed.
 
 What to do next:
-Start with basic checks, then inspect professionally if needed.
+Describe when it happens and whether it changes with speed, braking, acceleration, or engine temperature.
 
 When to stop driving:
-Stop if the vehicle behaves abnormally or shows warnings.
+Stop driving if the vehicle feels unsafe, loses power, overheats, smokes, or warning lights flash.
+`;
+  }
+
+  return `
+Voice summary:
+Alright, this needs a little more detail before I call the exact cause.
+
+Confidence:
+65
+
+Risk level:
+Medium
+
+Likely issue:
+${text}
+
+Why it fits:
+The symptom suggests a possible vehicle issue, but more context is needed.
+
+What to do next:
+Describe when it happens and whether it changes with speed, braking, acceleration, or engine temperature.
+
+When to stop driving:
+Stop driving if the vehicle feels unsafe, loses power, overheats, smokes, or warning lights flash.
 `;
 }
