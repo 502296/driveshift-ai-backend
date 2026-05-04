@@ -4,37 +4,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { imageBase64 } = req.body;
-
-    if (!imageBase64) {
-      return res.status(400).json({ result: "No image provided" });
-    }
-
-    const prompt = `
-You are DriveShift, an expert automotive diagnostic AI.
-
-Analyze this dashboard warning light image.
-
-Identify:
-- What warning light is shown
-- What it usually means
-- The most likely cause
-- What the driver should do next
-
-Respond in this format:
-
-Likely issue:
-[short answer]
-
-Why it fits:
-[clear explanation]
-
-What to do next:
-[practical steps]
-
-When to stop driving:
-[safety advice]
-`;
+    const { image } = req.body;
 
     const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
@@ -48,16 +18,44 @@ When to stop driving:
           {
             role: "user",
             content: [
-              { type: "input_text", text: prompt },
+              {
+                type: "input_text",
+                text: `
+You are DriveShift Vision AI.
+
+Analyze this car dashboard image.
+
+1. Identify the warning light visually (even without text).
+2. Name the issue clearly.
+3. Explain briefly why.
+4. Give 2-3 practical steps.
+5. Give safety advice.
+
+Respond EXACTLY in this format:
+
+Likely issue:
+...
+
+Why it fits:
+...
+
+What to do next:
+...
+
+When to stop driving:
+...
+`
+              },
               {
                 type: "input_image",
-                image_url: `data:image/jpeg;base64,${imageBase64}`,
-              },
-            ],
-          },
+                image_url: `data:image/jpeg;base64,${image}`
+              }
+            ]
+          }
         ],
-        max_output_tokens: 500,
-      }),
+        temperature: 0.2,
+        max_output_tokens: 500
+      })
     });
 
     const data = await response.json();
@@ -68,9 +66,10 @@ When to stop driving:
       "No diagnosis returned.";
 
     return res.status(200).json({ result: text });
-  } catch (err) {
+
+  } catch (error) {
     return res.status(500).json({
-      result: "DriveShift image analysis failed.",
+      result: "DriveShift Vision failed. Try again."
     });
   }
 }
