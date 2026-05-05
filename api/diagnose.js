@@ -31,7 +31,9 @@ export default async function handler(req, res) {
 
     const minimumQuestions = hasObdCode ? 0 : readiness.minimumQuestions;
     const shouldAskFollowUp =
-      !hasObdCode && !readiness.readyForAnalysis && realAnswerCount < minimumQuestions;
+      !hasObdCode &&
+      !readiness.readyForAnalysis &&
+      realAnswerCount < minimumQuestions;
 
     const userInput =
       answerList.length > 0
@@ -89,6 +91,9 @@ ${realAnswerCount}
 Current mode:
 ${shouldAskFollowUp ? "follow_up" : "analysis"}
 
+Speed rule:
+Respond quickly. Keep follow-up questions short. Keep final analysis concise but useful.
+
 Critical diagnostic rules:
 If black smoke, fuel smell, raw fuel smell, strong fuel odor, or rich running is present, keep overfueling, injector leak, fuel pressure, MAF/MAP data, oxygen sensor feedback, or ignition misfire with unburned fuel as higher priority than vacuum leak unless strong evidence says otherwise.
 If overheating, coolant loss, steam, temperature gauge high, or red temperature warning is present, keep cooling-system risk high priority.
@@ -105,17 +110,11 @@ Never repeat a question already asked.
 Do not ask checklist-style questions.
 Do not ask generic questions like "When does it happen?" if timing or context is already known.
 Prefer questions that separate fuel, ignition, air/vacuum, sensor, cooling, charging, starter, transmission, or brake causes.
-For rough idle or shaking, ask about cold vs warm, RPM behavior, misfire feeling, check engine light, and fuel/exhaust smell.
-For fuel smell or black smoke, ask about acceleration, warm engine, fuel smell location, power loss, and exhaust color.
-For overheating, ask about coolant loss, steam, temperature gauge behavior, heater performance, and fan operation.
-For no-start, ask whether it cranks, clicks, lights dim, fuel smell, and immobilizer/security light.
-For brake symptoms, ask about pedal feel, grinding, pulling, fluid leak, and warning light.
 A good question should help choose between two or three mechanical causes.
 
 Final decision rule:
 If the pattern is already clear, stop asking and give analysis.
 Do not keep asking only to satisfy a question count.
-If you have at least two strong connected signals such as rough idle + fuel smell, black smoke + weak acceleration, overheating + coolant loss, no-start + clicking, shaking + flashing check engine light, brake warning + soft pedal, or oil light + engine noise, give analysis once basic safety context is reached.
 In analysis mode, never say "Still narrowing the issue."
 In analysis mode, Answer options must be None.
 
@@ -129,7 +128,6 @@ You MUST provide exactly 4 short answer options.
 The 4 answer options must match the question exactly.
 The answer options must be practical driver observations, not repair instructions.
 Do not include safety advice inside the question.
-Make the question feel like a real mechanic is narrowing the issue.
 
 Rules for analysis mode:
 Give a professional diagnosis report.
@@ -139,8 +137,6 @@ Explain why it fits the user's symptoms.
 Give practical next checks.
 Give clear safety advice.
 If multiple systems could be involved, mention the top 2 possibilities calmly.
-Do not bury the dominant symptom.
-Do not write a generic answer.
 Do not mention AI.
 Do not say "as an AI".
 
@@ -150,13 +146,9 @@ Short but useful.
 No markdown.
 No bullets.
 No numbered lists.
-Do not over-scare the driver.
 
 Voice summary rules:
-Voice summary must be one short natural sentence.
-It should sound like a calm mechanic speaking.
-It must not list many items.
-It must not include the full report.
+Voice summary must be one short natural mechanic sentence.
 
 Output exactly this format:
 
@@ -187,27 +179,58 @@ When to stop driving:
 [clear safety advice]
 `;
 
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: process.env.DRIVESHIFT_MODEL || "gpt-4o",
-        input: prompt,
-        temperature: 0.06,
-        max_output_tokens: shouldAskFollowUp ? 480 : 880,
-      }),
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2800);
 
-    const data = await response.json();
+    let response;
+    let data;
 
-    if (!response.ok) {
-      return res.status(500).json({
-        result: shouldAskFollowUp
-          ? fallbackFollowUp(lang)
-          : fallbackAnalysis(lang),
+    try {
+      response = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: process.env.DRIVESHIFT_MODEL || "gpt-4o-mini",
+          input: prompt,
+          temperature: 0.05,
+          max_output_tokens: shouldAskFollowUp ? 260 : 520,
+        }),
+      });
+
+      clearTimeout(timeout);
+
+      if (!response.ok) {
+        return res.status(200).json({
+          result: buildFastLocalResult({
+            lang,
+            shouldAskFollowUp,
+            issue: safeIssue,
+            answers: answerList,
+            dominantSignals,
+            realAnswerCount,
+            minimumQuestions,
+          }),
+        });
+      }
+
+      data = await response.json();
+    } catch (_) {
+      clearTimeout(timeout);
+
+      return res.status(200).json({
+        result: buildFastLocalResult({
+          lang,
+          shouldAskFollowUp,
+          issue: safeIssue,
+          answers: answerList,
+          dominantSignals,
+          realAnswerCount,
+          minimumQuestions,
+        }),
       });
     }
 
@@ -215,9 +238,15 @@ When to stop driving:
 
     if (!text) {
       return res.status(200).json({
-        result: shouldAskFollowUp
-          ? fallbackFollowUp(lang)
-          : fallbackAnalysis(lang),
+        result: buildFastLocalResult({
+          lang,
+          shouldAskFollowUp,
+          issue: safeIssue,
+          answers: answerList,
+          dominantSignals,
+          realAnswerCount,
+          minimumQuestions,
+        }),
       });
     }
 
@@ -226,11 +255,288 @@ When to stop driving:
     text = enforceAnswerOptionCount(text, lang, shouldAskFollowUp);
 
     return res.status(200).json({ result: text });
-  } catch (error) {
-    return res.status(500).json({
+  } catch (_) {
+    return res.status(200).json({
       result: fallbackFollowUp("en"),
     });
   }
+}
+
+function buildFastLocalResult({
+  lang,
+  shouldAskFollowUp,
+  issue,
+  answers,
+  dominantSignals,
+  realAnswerCount,
+  minimumQuestions,
+}) {
+  if (shouldAskFollowUp) {
+    return buildFastFollowUp(lang, issue, answers, dominantSignals);
+  }
+
+  return buildFastAnalysis(lang, issue, dominantSignals, realAnswerCount, minimumQuestions);
+}
+
+function buildFastFollowUp(lang, issue, answers, dominantSignals) {
+  const text = [
+    String(issue || ""),
+    ...(Array.isArray(answers)
+      ? answers.map((a) => `${a?.question || ""} ${a?.answer || ""}`)
+      : []),
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  const asked = Array.isArray(answers)
+    ? answers.map((a) => String(a?.question || "").toLowerCase()).join(" ")
+    : "";
+
+  const hasFuel = includesAny(text, ["fuel smell", "gas smell", "raw fuel", "smells like gas"]);
+  const hasSmoke = includesAny(text, ["black smoke", "dark smoke", "smoke"]);
+  const hasNoStart = includesAny(text, ["won't start", "no start", "does not start", "click", "crank"]);
+  const hasOverheat = includesAny(text, ["overheat", "overheating", "coolant", "steam"]);
+  const hasBrake = includesAny(text, ["brake", "pedal", "brake fluid", "grinding"]);
+  const hasShake = includesAny(text, ["shake", "shaking", "rough idle", "vibration", "misfire"]);
+
+  if (lang === "es") {
+    if (hasNoStart && !asked.includes("crank")) {
+      return followUpEs(
+        "Necesito separar batería, starter o alimentación eléctrica.",
+        "Cuando intentas encender, ¿el motor gira o solo hace click?",
+        ["Gira normal", "Solo hace click", "No hace nada", "No sé"]
+      );
+    }
+
+    if (hasOverheat && !asked.includes("coolant")) {
+      return followUpEs(
+        "Necesito confirmar si el sistema de enfriamiento está perdiendo refrigerante.",
+        "¿Has notado pérdida de coolant, vapor o temperatura subiendo rápido?",
+        ["Pierde coolant", "Sale vapor", "Sube rápido", "No sé"]
+      );
+    }
+
+    if (hasBrake && !asked.includes("pedal")) {
+      return followUpEs(
+        "Necesito separar desgaste de frenos de una falla hidráulica.",
+        "¿Cómo se siente el pedal de freno?",
+        ["Muy suave", "Duro", "Vibra o raspa", "No sé"]
+      );
+    }
+
+    if ((hasFuel || hasSmoke) && !asked.includes("acceler")) {
+      return followUpEs(
+        "Necesito confirmar si el problema aparece bajo carga.",
+        "¿El olor a gasolina o humo empeora cuando aceleras?",
+        ["Sí, al acelerar", "También en idle", "Solo a veces", "No sé"]
+      );
+    }
+
+    if (hasShake && !asked.includes("warm")) {
+      return followUpEs(
+        "Necesito separar falla de encendido de soporte de motor o mezcla.",
+        "¿El motor tiembla más cuando está frío o cuando ya está caliente?",
+        ["Más frío", "Más caliente", "Igual siempre", "No sé"]
+      );
+    }
+
+    return followUpEs(
+      "Necesito un detalle más para separar las causas probables.",
+      "¿Qué cambia más cuando aparece el problema?",
+      ["Ruido", "Olor", "Vibración", "Pérdida de potencia"]
+    );
+  }
+
+  if (hasNoStart && !asked.includes("crank")) {
+    return followUpEn(
+      "I need to separate battery, starter, or electrical power.",
+      "When you try to start it, does the engine crank or only click?",
+      ["Cranks normally", "Only one click", "No sound", "Not sure"]
+    );
+  }
+
+  if (hasOverheat && !asked.includes("coolant")) {
+    return followUpEn(
+      "I need to confirm if the cooling system is losing coolant.",
+      "Have you noticed coolant loss, steam, or the temperature rising fast?",
+      ["Coolant loss", "Steam", "Temp rises fast", "Not sure"]
+    );
+  }
+
+  if (hasBrake && !asked.includes("pedal")) {
+    return followUpEn(
+      "I need to separate brake wear from a hydraulic brake issue.",
+      "How does the brake pedal feel?",
+      ["Very soft", "Hard", "Grinding or vibration", "Not sure"]
+    );
+  }
+
+  if ((hasFuel || hasSmoke) && !asked.includes("acceler")) {
+    return followUpEn(
+      "I need to confirm if the issue happens under load.",
+      "Does the fuel smell or smoke get worse when you accelerate?",
+      ["Yes, under acceleration", "Also at idle", "Only sometimes", "Not sure"]
+    );
+  }
+
+  if (hasShake && !asked.includes("warm")) {
+    return followUpEn(
+      "I need to separate ignition misfire from mount or mixture issues.",
+      "Does the engine shake more when it is cold or after it warms up?",
+      ["More when cold", "More when warm", "Same all the time", "Not sure"]
+    );
+  }
+
+  return followUpEn(
+    "I need one more detail to separate the likely causes.",
+    "What changes the most when the problem appears?",
+    ["Noise", "Smell", "Vibration", "Power loss"]
+  );
+}
+
+function followUpEn(summary, question, options) {
+  return `Diagnosis status: follow_up
+
+Voice summary:
+${summary}
+
+Confidence:
+55
+
+Risk level:
+Medium
+
+Likely issue:
+Still narrowing the issue.
+
+Why it fits:
+The current symptoms need one more targeted detail before a reliable diagnosis.
+
+What to do next:
+${question}
+
+Answer options:
+${options[0]}
+${options[1]}
+${options[2]}
+${options[3]}
+
+When to stop driving:
+Stop driving if the car feels unsafe, overheats, smells like burning, loses strong power, or shows a red warning light.`;
+}
+
+function followUpEs(summary, question, options) {
+  return `Diagnosis status: follow_up
+
+Voice summary:
+${summary}
+
+Confidence:
+55
+
+Risk level:
+Medium
+
+Likely issue:
+Still narrowing the issue.
+
+Why it fits:
+Los síntomas actuales necesitan un detalle más antes de un diagnóstico confiable.
+
+What to do next:
+${question}
+
+Answer options:
+${options[0]}
+${options[1]}
+${options[2]}
+${options[3]}
+
+When to stop driving:
+Deja de manejar si el auto se siente inseguro, se sobrecalienta, huele a quemado, pierde mucha potencia, o aparece una luz roja.`;
+}
+
+function buildFastAnalysis(lang, issue, dominantSignals, realAnswerCount, minimumQuestions) {
+  const text = String(issue || "").toLowerCase();
+  const hasFuel = includesAny(text, ["fuel", "gas smell", "raw fuel"]);
+  const hasSmoke = includesAny(text, ["black smoke", "smoke"]);
+  const hasNoStart = includesAny(text, ["won't start", "no start", "click"]);
+  const hasOverheat = includesAny(text, ["overheat", "coolant", "steam"]);
+  const hasBrake = includesAny(text, ["brake"]);
+
+  if (lang === "es") {
+    const likely = hasNoStart
+      ? "Possible weak battery, starter, or power connection issue."
+      : hasOverheat
+      ? "Possible cooling system fault."
+      : hasBrake
+      ? "Possible brake system safety issue."
+      : hasFuel || hasSmoke
+      ? "Possible rich-running, injector, fuel pressure, or ignition misfire issue."
+      : "Possible vehicle system fault that needs inspection.";
+
+    return `Diagnosis status: analysis
+
+Voice summary:
+DriveShift encontró una dirección probable y conviene confirmarla con una revisión básica.
+
+Confidence:
+65
+
+Risk level:
+Medium
+
+Likely issue:
+${likely}
+
+Why it fits:
+Los síntomas y las respuestas apuntan a un sistema principal, pero todavía conviene confirmar con una revisión práctica.
+
+What to do next:
+Haz un escaneo OBD, revisa luces de advertencia, olores, fugas, vibración y pérdida de potencia. Si el síntoma continúa, pide una inspección profesional.
+
+Answer options:
+None
+
+When to stop driving:
+Deja de manejar si el auto se siente inseguro, se sobrecalienta, vibra fuerte, huele a quemado, pierde mucha potencia, o aparece una luz roja.`;
+  }
+
+  const likely = hasNoStart
+    ? "Possible weak battery, starter, or power connection issue."
+    : hasOverheat
+    ? "Possible cooling system fault."
+    : hasBrake
+    ? "Possible brake system safety issue."
+    : hasFuel || hasSmoke
+    ? "Possible rich-running, injector, fuel pressure, or ignition misfire issue."
+    : "Possible vehicle system fault that needs inspection.";
+
+  return `Diagnosis status: analysis
+
+Voice summary:
+DriveShift found a likely direction and it should be confirmed with basic checks.
+
+Confidence:
+65
+
+Risk level:
+Medium
+
+Likely issue:
+${likely}
+
+Why it fits:
+The symptoms and answers point toward one main system, but it should still be confirmed with practical checks.
+
+What to do next:
+Run an OBD scan, check warning lights, smell, leaks, vibration, and power loss. If the symptom continues, get a professional inspection.
+
+Answer options:
+None
+
+When to stop driving:
+Stop driving if the car feels unsafe, overheats, shakes badly, smells like burning, loses strong power, or shows a red warning light.`;
 }
 
 function countUserAnswers(answers) {
@@ -260,103 +566,20 @@ function detectDominantSignals(issue, answers) {
   const signals = [];
 
   const rules = [
-    {
-      label: "black smoke / rich running",
-      words: ["black smoke", "dark smoke", "rich", "running rich"],
-    },
-    {
-      label: "fuel smell / raw fuel",
-      words: [
-        "fuel smell",
-        "gas smell",
-        "raw fuel",
-        "smells like gas",
-        "gasoline smell",
-        "strong fuel",
-      ],
-    },
-    {
-      label: "overheating / cooling risk",
-      words: [
-        "overheat",
-        "overheating",
-        "temperature high",
-        "temp gauge",
-        "steam",
-        "coolant",
-      ],
-    },
-    {
-      label: "burning smell / smoke safety risk",
-      words: [
-        "burning smell",
-        "smells burnt",
-        "burnt smell",
-        "smoke from engine",
-        "electrical burning",
-      ],
-    },
-    {
-      label: "brake safety risk",
-      words: [
-        "brake",
-        "brakes",
-        "low brake pedal",
-        "soft brake pedal",
-        "brake fluid",
-        "grinding brakes",
-      ],
-    },
-    {
-      label: "stalling while driving",
-      words: ["stall while driving", "dies while driving", "shuts off while driving"],
-    },
-    {
-      label: "severe power loss",
-      words: [
-        "loss of power",
-        "no power",
-        "limp mode",
-        "won't accelerate",
-        "slow acceleration",
-        "weak acceleration",
-      ],
-    },
-    {
-      label: "misfire / shaking",
-      words: [
-        "misfire",
-        "shaking",
-        "rough idle",
-        "vibration",
-        "jerking",
-        "shakes at idle",
-      ],
-    },
-    {
-      label: "turbo / boost issue",
-      words: ["turbo", "boost", "whistle", "underboost", "boost leak"],
-    },
-    {
-      label: "electrical / charging issue",
-      words: ["battery light", "alternator", "charging", "electrical", "no crank"],
-    },
-    {
-      label: "oil pressure risk",
-      words: ["oil pressure", "red oil light", "oil light"],
-    },
-    {
-      label: "transmission / drivability issue",
-      words: ["transmission", "gear", "shifting", "slipping", "hard shift"],
-    },
-    {
-      label: "starting system issue",
-      words: ["no start", "won't start", "does not start", "crank", "starter"],
-    },
-    {
-      label: "check engine light",
-      words: ["check engine", "engine light", "cel", "service engine"],
-    },
+    { label: "black smoke / rich running", words: ["black smoke", "dark smoke", "rich", "running rich"] },
+    { label: "fuel smell / raw fuel", words: ["fuel smell", "gas smell", "raw fuel", "smells like gas", "gasoline smell", "strong fuel"] },
+    { label: "overheating / cooling risk", words: ["overheat", "overheating", "temperature high", "temp gauge", "steam", "coolant"] },
+    { label: "burning smell / smoke safety risk", words: ["burning smell", "smells burnt", "burnt smell", "smoke from engine", "electrical burning"] },
+    { label: "brake safety risk", words: ["brake", "brakes", "low brake pedal", "soft brake pedal", "brake fluid", "grinding brakes"] },
+    { label: "stalling while driving", words: ["stall while driving", "dies while driving", "shuts off while driving"] },
+    { label: "severe power loss", words: ["loss of power", "no power", "limp mode", "won't accelerate", "slow acceleration", "weak acceleration"] },
+    { label: "misfire / shaking", words: ["misfire", "shaking", "rough idle", "vibration", "jerking", "shakes at idle"] },
+    { label: "turbo / boost issue", words: ["turbo", "boost", "whistle", "underboost", "boost leak"] },
+    { label: "electrical / charging issue", words: ["battery light", "alternator", "charging", "electrical", "no crank"] },
+    { label: "oil pressure risk", words: ["oil pressure", "red oil light", "oil light"] },
+    { label: "transmission / drivability issue", words: ["transmission", "gear", "shifting", "slipping", "hard shift"] },
+    { label: "starting system issue", words: ["no start", "won't start", "does not start", "crank", "starter"] },
+    { label: "check engine light", words: ["check engine", "engine light", "cel", "service engine"] },
   ];
 
   for (const rule of rules) {
@@ -371,73 +594,30 @@ function detectDominantSignals(issue, answers) {
 function detectComplexity(issue, dominantSignals, answers) {
   const text = String(issue || "").toLowerCase();
   const answerText = Array.isArray(answers)
-    ? answers
-        .map((a) => `${a?.question || ""} ${a?.answer || ""}`)
-        .join(" ")
-        .toLowerCase()
+    ? answers.map((a) => `${a?.question || ""} ${a?.answer || ""}`).join(" ").toLowerCase()
     : "";
 
   const allText = `${text} ${answerText}`;
   const signalCount = Array.isArray(dominantSignals) ? dominantSignals.length : 0;
 
   const highRiskWords = [
-    "smoke",
-    "burning",
-    "overheat",
-    "overheating",
-    "brake",
-    "oil pressure",
-    "airbag",
-    "srs",
-    "stall",
-    "dies while driving",
-    "red warning",
-    "fuel smell",
-    "gas smell",
-    "raw fuel",
-    "no brakes",
-    "steering locked",
+    "smoke", "burning", "overheat", "overheating", "brake", "oil pressure",
+    "airbag", "srs", "stall", "dies while driving", "red warning",
+    "fuel smell", "gas smell", "raw fuel", "no brakes", "steering locked",
     "flashing check engine",
   ];
 
   const complexWords = [
-    "ac",
-    "a/c",
-    "air conditioning",
-    "compressor",
-    "cuts out",
-    "intermittent",
-    "module",
-    "airbag",
-    "srs",
-    "water",
-    "leak",
-    "roof",
-    "sunroof",
-    "electrical",
-    "misfire",
-    "transmission",
-    "overheating",
-    "stall",
-    "dies",
-    "shakes",
-    "vibration",
-    "turbo",
-    "boost",
-    "black smoke",
-    "whistle",
-    "semi",
-    "truck",
+    "ac", "a/c", "air conditioning", "compressor", "cuts out", "intermittent",
+    "module", "airbag", "srs", "water", "leak", "roof", "sunroof",
+    "electrical", "misfire", "transmission", "overheating", "stall", "dies",
+    "shakes", "vibration", "turbo", "boost", "black smoke", "whistle",
+    "semi", "truck",
   ];
 
   const simpleWords = [
-    "maintenance",
-    "oil change",
-    "tire pressure",
-    "wiper",
-    "washer fluid",
-    "light bulb",
-    "gas cap",
+    "maintenance", "oil change", "tire pressure", "wiper", "washer fluid",
+    "light bulb", "gas cap",
   ];
 
   const isHighRiskWord = highRiskWords.some((w) => allText.includes(w));
@@ -447,8 +627,8 @@ function detectComplexity(issue, dominantSignals, answers) {
   if (isSimpleWord && !isHighRiskWord && signalCount === 0) {
     return {
       level: "simple low-risk symptom",
-      minimumQuestions: 2,
-      reason: "simple maintenance-style concern",
+      minimumQuestions: 3,
+      reason: "simple issue, but DriveShift still asks a few useful questions",
     };
   }
 
@@ -456,7 +636,7 @@ function detectComplexity(issue, dominantSignals, answers) {
     return {
       level: "very high complexity multi-signal case",
       minimumQuestions: 6,
-      reason: "multiple dominant symptoms need deeper narrowing before a reliable report",
+      reason: "multiple dominant symptoms need deeper narrowing",
     };
   }
 
@@ -471,7 +651,7 @@ function detectComplexity(issue, dominantSignals, answers) {
   if (isHighRiskWord || signalCount === 2) {
     return {
       level: "high complexity or safety-sensitive",
-      minimumQuestions: 4,
+      minimumQuestions: 5,
       reason: "safety-sensitive symptoms require controlled questioning",
     };
   }
@@ -479,15 +659,15 @@ function detectComplexity(issue, dominantSignals, answers) {
   if (isComplexWord || signalCount === 1) {
     return {
       level: "complex symptom",
-      minimumQuestions: 3,
-      reason: "the issue needs a few targeted mechanic questions",
+      minimumQuestions: 4,
+      reason: "the issue needs targeted mechanic questions",
     };
   }
 
   return {
     level: "standard symptom",
-    minimumQuestions: 2,
-    reason: "standard issue with enough room for quick narrowing",
+    minimumQuestions: 3,
+    reason: "standard issue with three useful narrowing questions",
   };
 }
 
@@ -502,13 +682,7 @@ function detectDiagnosticReadiness(issue, answers, dominantSignals, complexity) 
     .join(" ")
     .toLowerCase();
 
-  const hasFuel = includesAny(text, [
-    "fuel smell",
-    "gas smell",
-    "raw fuel",
-    "strong fuel",
-    "smells like gas",
-  ]);
+  const hasFuel = includesAny(text, ["fuel smell", "gas smell", "raw fuel", "strong fuel", "smells like gas"]);
   const hasSmoke = includesAny(text, ["black smoke", "dark smoke", "smoke"]);
   const hasRoughIdle = includesAny(text, ["rough idle", "shakes at idle", "shaking", "idle"]);
   const hasMisfire = includesAny(text, ["misfire", "flashing", "check engine"]);
@@ -521,44 +695,41 @@ function detectDiagnosticReadiness(issue, answers, dominantSignals, complexity) 
   let readyForAnalysis = false;
   let reason = complexity.reason;
 
-  if (hasFuel && hasRoughIdle && answerCount >= 2) {
-    minimumQuestions = Math.min(minimumQuestions, 3);
-    readyForAnalysis = answerCount >= 3;
-    reason = "fuel smell plus rough idle creates a clear fuel/ignition diagnostic path";
+  if (hasFuel && hasRoughIdle) {
+    minimumQuestions = Math.max(minimumQuestions, 4);
+    reason = "fuel smell plus rough idle needs fuel and ignition separation";
   }
 
   if ((hasSmoke && hasFuel) || (hasSmoke && hasWeakPower)) {
-    minimumQuestions = Math.min(minimumQuestions, 4);
-    readyForAnalysis = answerCount >= 3;
-    reason = "smoke plus fuel or power loss is a strong overfueling pattern";
+    minimumQuestions = Math.max(minimumQuestions, 5);
+    reason = "smoke plus fuel or power loss is a high-priority pattern";
   }
 
   if (hasOverheat) {
-    minimumQuestions = Math.max(minimumQuestions, 4);
+    minimumQuestions = Math.max(minimumQuestions, 5);
     reason = "overheating needs safety and cooling-system context";
   }
 
   if (hasNoStart) {
-    minimumQuestions = Math.min(Math.max(minimumQuestions, 3), 4);
+    minimumQuestions = Math.max(minimumQuestions, 4);
     reason = "no-start cases need crank/click/power/fuel separation";
   }
 
   if (hasBrake) {
-    minimumQuestions = Math.max(minimumQuestions, 4);
+    minimumQuestions = Math.max(minimumQuestions, 5);
     reason = "brake symptoms require safety-controlled questioning";
   }
 
-  if (hasMisfire && hasRoughIdle && answerCount >= 2) {
-    minimumQuestions = Math.min(minimumQuestions, 3);
-    readyForAnalysis = answerCount >= 3;
-    reason = "rough idle plus misfire/check-engine context is enough for a focused report";
+  if (hasMisfire && hasRoughIdle) {
+    minimumQuestions = Math.max(minimumQuestions, 4);
+    reason = "rough idle plus misfire/check-engine context needs targeted narrowing";
   }
 
   if (answerCount >= minimumQuestions) {
     readyForAnalysis = true;
   }
 
-  minimumQuestions = clamp(minimumQuestions, 2, 6);
+  minimumQuestions = clamp(minimumQuestions, 3, 6);
 
   return {
     minimumQuestions,
