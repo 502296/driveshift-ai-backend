@@ -16,9 +16,16 @@ export default async function handler(req, res) {
 
     const realAnswerCount = countUserAnswers(answerList);
 
-    // First free-text message = follow-up.
-    // After user answers follow-up = final report.
-    const shouldAskFollowUp = !hasObdCode && realAnswerCount <= 1;
+    // 🧠 NEW LOGIC (IMPORTANT)
+    let stage = "follow_up";
+
+    if (hasObdCode) {
+      stage = "analysis"; // OBD goes straight to analysis
+    } else if (realAnswerCount >= 2) {
+      stage = "analysis"; // AFTER TWO ANSWERS ONLY
+    }
+
+    const shouldAskFollowUp = stage === "follow_up";
 
     const userInput =
       answerList.length > 0
@@ -48,16 +55,15 @@ Detected OBD code:
 ${hasObdCode ? obdCode : "None"}
 
 Mode:
-${shouldAskFollowUp ? "follow_up" : "final"}
+${shouldAskFollowUp ? "follow_up" : "analysis"}
 
 If mode is follow_up:
 Ask exactly ONE practical mechanic question.
 Do not diagnose yet.
 Do not give likely causes.
 Do not give repair steps.
-The question must narrow the issue.
 
-If mode is final:
+If mode is analysis:
 Give the most likely issue, why it fits, and practical next steps.
 
 Style:
@@ -69,7 +75,7 @@ Do not mention AI.
 
 Output exactly this format:
 
-Diagnosis status: ${shouldAskFollowUp ? "follow_up" : "final"}
+Diagnosis status: ${shouldAskFollowUp ? "follow_up" : "analysis"}
 
 Voice summary:
 [short natural mechanic speech]
@@ -81,13 +87,13 @@ Risk level:
 [High or Medium or Low]
 
 Likely issue:
-[if follow_up: Still narrowing the issue. If final: short likely issue]
+[if follow_up: Still narrowing the issue. If analysis: short likely issue]
 
 Why it fits:
 [short explanation]
 
 What to do next:
-[if follow_up: one clear follow-up question only. If final: practical next steps]
+[if follow_up: one clear follow-up question only. If analysis: practical next steps]
 
 When to stop driving:
 [clear safety advice]
@@ -132,135 +138,4 @@ When to stop driving:
       result: fallback("en", true),
     });
   }
-}
-
-function countUserAnswers(answerList) {
-  if (!Array.isArray(answerList)) return 0;
-
-  return answerList.filter((item) => {
-    const ans = String(item?.answer || "").trim();
-    return ans.length > 0;
-  }).length;
-}
-
-function extractText(data) {
-  if (data.output_text) return data.output_text;
-
-  let text = "";
-
-  if (Array.isArray(data.output)) {
-    for (const block of data.output) {
-      if (Array.isArray(block?.content)) {
-        for (const c of block.content) {
-          if (c?.text) text += c.text + "\n";
-        }
-      }
-    }
-  }
-
-  return text;
-}
-
-function normalizeStatusLine(text, shouldAskFollowUp) {
-  if (!text) return "";
-
-  const wanted = shouldAskFollowUp ? "follow_up" : "final";
-
-  text = text.replace(
-    /Diagnosis status:\s*\n\s*(follow_up|final)/i,
-    "Diagnosis status: $1"
-  );
-
-  if (!/Diagnosis status:\s*(follow_up|final)/i.test(text)) {
-    text = `Diagnosis status: ${wanted}\n\n${text}`;
-  }
-
-  if (shouldAskFollowUp) {
-    text = text.replace(/Diagnosis status:\s*final/i, "Diagnosis status: follow_up");
-  } else {
-    text = text.replace(/Diagnosis status:\s*follow_up/i, "Diagnosis status: final");
-  }
-
-  return text.trim();
-}
-
-function ensureRequiredFormat(text, lang, shouldAskFollowUp) {
-  const required = [
-    "Diagnosis status:",
-    "Voice summary:",
-    "Confidence:",
-    "Risk level:",
-    "Likely issue:",
-    "Why it fits:",
-    "What to do next:",
-    "When to stop driving:",
-  ];
-
-  const ok = required.every((label) =>
-    text.toLowerCase().includes(label.toLowerCase())
-  );
-
-  if (ok) return text;
-
-  return fallback(lang, shouldAskFollowUp);
-}
-
-function fallback(lang = "en", shouldAskFollowUp = true) {
-  const status = shouldAskFollowUp ? "follow_up" : "final";
-
-  if (lang === "es") {
-    return `
-Diagnosis status: ${status}
-
-Voice summary:
-Voy a reducir esto paso a paso.
-
-Confidence:
-55
-
-Risk level:
-Medium
-
-Likely issue:
-${shouldAskFollowUp ? "Still narrowing the issue." : "A drivability issue is likely."}
-
-Why it fits:
-This detail helps separate speed, load, and engine behavior.
-
-What to do next:
-${shouldAskFollowUp
-  ? "Does it happen only when accelerating, or also when you hold a steady speed?"
-  : "Start with basic checks, then inspect professionally if it continues."}
-
-When to stop driving:
-Stop driving if the vehicle shakes badly, loses power, overheats, smokes, or feels unsafe.
-`;
-  }
-
-  return `
-Diagnosis status: ${status}
-
-Voice summary:
-I’ll narrow this down step by step.
-
-Confidence:
-55
-
-Risk level:
-Medium
-
-Likely issue:
-${shouldAskFollowUp ? "Still narrowing the issue." : "A drivability issue is likely."}
-
-Why it fits:
-This detail helps separate speed, load, and engine behavior.
-
-What to do next:
-${shouldAskFollowUp
-  ? "Does it happen only when accelerating, or also when you hold a steady speed?"
-  : "Start with basic checks, then inspect professionally if it continues."}
-
-When to stop driving:
-Stop driving if the vehicle shakes badly, loses power, overheats, smokes, or feels unsafe.
-`;
 }
