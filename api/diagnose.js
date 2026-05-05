@@ -1,53 +1,60 @@
 export default async function handler(req, res) {
-if (req.method !== "POST") {
-return res.status(405).json({ result: "Method not allowed" });
-}
+  if (req.method !== "POST") {
+    return res.status(405).json({ result: "Method not allowed" });
+  }
 
-try {
-const { issue, answers, language, vehicleProfile } = req.body;
+  try {
+    const { issue, answers, language, vehicleProfile } = req.body;
 
-const lang = language === "es" ? "es" : "en";
-const safeIssue = String(issue || "").trim();
-const answerList = Array.isArray(answers) ? answers : [];
-const profile = vehicleProfile || {};
+    const lang = language === "es" ? "es" : "en";
+    const safeIssue = String(issue || "").trim();
+    const answerList = Array.isArray(answers) ? answers : [];
+    const profile = vehicleProfile || {};
 
-if (!safeIssue) {
-return res.status(200).json({ result: fallbackFollowUp(lang) });
-}
+    if (!safeIssue) {
+      return res.status(200).json({ result: fallbackFollowUp(lang) });
+    }
 
-const possibleObdCode = safeIssue.match(/\b[PCBU][0-9A-F]{4}\b/i);
-const hasObdCode = Boolean(possibleObdCode);
-const obdCode = hasObdCode ? possibleObdCode[0].toUpperCase() : "";
+    const possibleObdCode = safeIssue.match(/\b[PCBU][0-9A-F]{4}\b/i);
+    const hasObdCode = Boolean(possibleObdCode);
+    const obdCode = hasObdCode ? possibleObdCode[0].toUpperCase() : "";
 
-const realAnswerCount = countUserAnswers(answerList);
-const dominantSignals = detectDominantSignals(safeIssue, answerList);
-const complexity = detectComplexity(safeIssue, dominantSignals, answerList);
+    const realAnswerCount = countUserAnswers(answerList);
+    const dominantSignals = detectDominantSignals(safeIssue, answerList);
+    const complexity = detectComplexity(safeIssue, dominantSignals, answerList);
+    const readiness = detectDiagnosticReadiness(
+      safeIssue,
+      answerList,
+      dominantSignals,
+      complexity
+    );
 
-const minimumQuestions = hasObdCode ? 0 : complexity.minimumQuestions;
-const shouldAskFollowUp = !hasObdCode && realAnswerCount < minimumQuestions;
+    const minimumQuestions = hasObdCode ? 0 : readiness.minimumQuestions;
+    const shouldAskFollowUp =
+      !hasObdCode && !readiness.readyForAnalysis && realAnswerCount < minimumQuestions;
 
-const userInput =
-answerList.length > 0
-? answerList
-.map((a, index) => {
-const q = String(a.question || `Question ${index + 1}`).trim();
-const ans = String(a.answer || "").trim();
-return `${index + 1}. ${q}: ${ans}`;
-})
-.join("\n")
-: "No additional answers yet.";
+    const userInput =
+      answerList.length > 0
+        ? answerList
+            .map((a, index) => {
+              const q = String(a.question || `Question ${index + 1}`).trim();
+              const ans = String(a.answer || "").trim();
+              return `${index + 1}. ${q}: ${ans}`;
+            })
+            .join("\n")
+        : "No additional answers yet.";
 
-const vehicleText = buildVehicleText(profile);
-const dominantText = dominantSignals.length
-? dominantSignals.join(", ")
-: "None detected yet";
+    const vehicleText = buildVehicleText(profile);
+    const dominantText = dominantSignals.length
+      ? dominantSignals.join(", ")
+      : "None detected yet";
 
-const prompt = `
+    const prompt = `
 You are DriveShift Doctor, a calm senior automotive diagnostic mechanic.
 
 You are not a chatbot.
 You behave like a real diagnostic mechanic:
-you ask focused questions first, preserve the strongest symptom direction, and only give a final report when enough information exists.
+you ask focused diagnostic questions, preserve the strongest symptom direction, and stop asking once the pattern is clear.
 
 Language:
 ${lang === "es" ? "Spanish" : "English"}
@@ -71,7 +78,7 @@ Diagnostic complexity:
 ${complexity.level}
 
 Question depth reason:
-${complexity.reason}
+${readiness.reason}
 
 Required minimum answered questions before final report:
 ${minimumQuestions}
@@ -83,21 +90,34 @@ Current mode:
 ${shouldAskFollowUp ? "follow_up" : "analysis"}
 
 Critical diagnostic rules:
-If dominant symptom lock includes black smoke, fuel smell, raw fuel smell, strong fuel odor, or rich running, you must keep overfueling, injector leak, fuel pressure, MAF/MAP data, oxygen sensor feedback, or ignition misfire with unburned fuel as higher priority than vacuum leak unless the user gives strong evidence otherwise.
-If dominant symptom lock includes overheating, coolant loss, steam, temperature gauge high, or red temperature warning, you must keep cooling-system risk high priority.
-If dominant symptom lock includes burning smell, smoke from engine bay, oil smell, electrical burning, or brake smell, you must treat it as safety-sensitive.
-If dominant symptom lock includes brake warning, low brake pedal, grinding brakes, or brake fluid leak, you must prioritize brake safety.
-If dominant symptom lock includes stall while driving, severe power loss, red warning light, oil pressure light, or battery/charging warning while driving, you must clearly advise caution.
+If black smoke, fuel smell, raw fuel smell, strong fuel odor, or rich running is present, keep overfueling, injector leak, fuel pressure, MAF/MAP data, oxygen sensor feedback, or ignition misfire with unburned fuel as higher priority than vacuum leak unless strong evidence says otherwise.
+If overheating, coolant loss, steam, temperature gauge high, or red temperature warning is present, keep cooling-system risk high priority.
+If burning smell, smoke from engine bay, oil smell, electrical burning, or brake smell is present, treat it as safety-sensitive.
+If brake warning, low brake pedal, grinding brakes, or brake fluid leak is present, prioritize brake safety.
+If stall while driving, severe power loss, red warning light, oil pressure light, or battery/charging warning while driving is present, clearly advise caution.
 Do not let later minor symptoms override the strongest dangerous symptom.
 Do not jump to exotic causes before simple high-probability checks.
 
-Question strategy:
+Mechanic question strategy:
 Ask only one question per turn.
-Each question must remove uncertainty.
+Each question must separate likely causes.
 Never repeat a question already asked.
-Do not ask random generic questions.
-For safety-sensitive symptoms, ask enough questions to understand severity, timing, warning lights, smell/smoke/leaks, and drivability.
-For simple symptoms, keep the flow short and fast.
+Do not ask checklist-style questions.
+Do not ask generic questions like "When does it happen?" if timing or context is already known.
+Prefer questions that separate fuel, ignition, air/vacuum, sensor, cooling, charging, starter, transmission, or brake causes.
+For rough idle or shaking, ask about cold vs warm, RPM behavior, misfire feeling, check engine light, and fuel/exhaust smell.
+For fuel smell or black smoke, ask about acceleration, warm engine, fuel smell location, power loss, and exhaust color.
+For overheating, ask about coolant loss, steam, temperature gauge behavior, heater performance, and fan operation.
+For no-start, ask whether it cranks, clicks, lights dim, fuel smell, and immobilizer/security light.
+For brake symptoms, ask about pedal feel, grinding, pulling, fluid leak, and warning light.
+A good question should help choose between two or three mechanical causes.
+
+Final decision rule:
+If the pattern is already clear, stop asking and give analysis.
+Do not keep asking only to satisfy a question count.
+If you have at least two strong connected signals such as rough idle + fuel smell, black smoke + weak acceleration, overheating + coolant loss, no-start + clicking, shaking + flashing check engine light, brake warning + soft pedal, or oil light + engine noise, give analysis once basic safety context is reached.
+In analysis mode, never say "Still narrowing the issue."
+In analysis mode, Answer options must be None.
 
 Rules for follow_up mode:
 Ask exactly ONE smart mechanic question.
@@ -110,9 +130,6 @@ The 4 answer options must match the question exactly.
 The answer options must be practical driver observations, not repair instructions.
 Do not include safety advice inside the question.
 Make the question feel like a real mechanic is narrowing the issue.
-Do not ask generic questions like "When does it happen?" if the user's symptoms already include timing or context.
-Always prefer a diagnostic question that directly narrows a mechanical cause (misfire, fuel, air, ignition, cooling, etc).
-Avoid broad or vague questions unless the problem is unclear.
 
 Rules for analysis mode:
 Give a professional diagnosis report.
@@ -164,418 +181,526 @@ What to do next:
 [if follow_up: one clear follow-up question only. If analysis: practical next steps]
 
 Answer options:
-[option 1]
-[option 2]
-[option 3]
-[option 4]
+[if follow_up: four options. If analysis: None]
 
 When to stop driving:
 [clear safety advice]
 `;
 
-const response = await fetch("https://api.openai.com/v1/responses", {
-method: "POST",
-headers: {
-"Content-Type": "application/json",
-Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-},
-body: JSON.stringify({
-model: process.env.DRIVESHIFT_MODEL || "gpt-4o",
-input: prompt,
-temperature: 0.08,
-max_output_tokens: shouldAskFollowUp ? 460 : 860,
-}),
-});
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: process.env.DRIVESHIFT_MODEL || "gpt-4o",
+        input: prompt,
+        temperature: 0.06,
+        max_output_tokens: shouldAskFollowUp ? 480 : 880,
+      }),
+    });
 
-const data = await response.json();
+    const data = await response.json();
 
-if (!response.ok) {
-return res.status(500).json({
-result: shouldAskFollowUp
-? fallbackFollowUp(lang)
-: fallbackAnalysis(lang),
-});
-}
+    if (!response.ok) {
+      return res.status(500).json({
+        result: shouldAskFollowUp
+          ? fallbackFollowUp(lang)
+          : fallbackAnalysis(lang),
+      });
+    }
 
-let text = extractText(data).trim();
+    let text = extractText(data).trim();
 
-if (!text) {
-return res.status(200).json({
-result: shouldAskFollowUp
-? fallbackFollowUp(lang)
-: fallbackAnalysis(lang),
-});
-}
+    if (!text) {
+      return res.status(200).json({
+        result: shouldAskFollowUp
+          ? fallbackFollowUp(lang)
+          : fallbackAnalysis(lang),
+      });
+    }
 
-text = normalizeStatusLine(text, shouldAskFollowUp);
-text = ensureRequiredFormat(text, lang, shouldAskFollowUp);
-text = enforceAnswerOptionCount(text, lang, shouldAskFollowUp);
+    text = normalizeStatusLine(text, shouldAskFollowUp);
+    text = ensureRequiredFormat(text, lang, shouldAskFollowUp);
+    text = enforceAnswerOptionCount(text, lang, shouldAskFollowUp);
 
-return res.status(200).json({ result: text });
-} catch (error) {
-return res.status(500).json({
-result: fallbackFollowUp("en"),
-});
-}
+    return res.status(200).json({ result: text });
+  } catch (error) {
+    return res.status(500).json({
+      result: fallbackFollowUp("en"),
+    });
+  }
 }
 
 function countUserAnswers(answers) {
-if (!Array.isArray(answers)) return 0;
+  if (!Array.isArray(answers)) return 0;
 
-return answers.filter((item) => {
-const answer = String(item?.answer || "").trim();
-const question = String(item?.question || "").toLowerCase();
+  return answers.filter((item) => {
+    const answer = String(item?.answer || "").trim();
+    const question = String(item?.question || "").toLowerCase();
 
-if (!answer) return false;
-if (question.includes("vehicle profile")) return false;
+    if (!answer) return false;
+    if (question.includes("vehicle profile")) return false;
 
-return true;
-}).length;
+    return true;
+  }).length;
 }
 
 function detectDominantSignals(issue, answers) {
-const combined = [
-String(issue || ""),
-...(Array.isArray(answers)
-? answers.map((a) => `${a?.question || ""} ${a?.answer || ""}`)
-: []),
-]
-.join(" ")
-.toLowerCase();
+  const combined = [
+    String(issue || ""),
+    ...(Array.isArray(answers)
+      ? answers.map((a) => `${a?.question || ""} ${a?.answer || ""}`)
+      : []),
+  ]
+    .join(" ")
+    .toLowerCase();
 
-const signals = [];
+  const signals = [];
 
-const rules = [
-{
-label: "black smoke / rich running",
-words: ["black smoke", "dark smoke", "rich", "running rich"],
-},
-{
-label: "fuel smell / raw fuel",
-words: [
-"fuel smell",
-"gas smell",
-"raw fuel",
-"smells like gas",
-"gasoline smell",
-"strong fuel",
-],
-},
-{
-label: "overheating / cooling risk",
-words: [
-"overheat",
-"overheating",
-"temperature high",
-"temp gauge",
-"steam",
-"coolant",
-],
-},
-{
-label: "burning smell / smoke safety risk",
-words: [
-"burning smell",
-"smells burnt",
-"burnt smell",
-"smoke from engine",
-"electrical burning",
-],
-},
-{
-label: "brake safety risk",
-words: [
-"brake",
-"brakes",
-"low brake pedal",
-"brake fluid",
-"grinding brakes",
-],
-},
-{
-label: "stalling while driving",
-words: ["stall while driving", "dies while driving", "shuts off while driving"],
-},
-{
-label: "severe power loss",
-words: [
-"loss of power",
-"no power",
-"limp mode",
-"won't accelerate",
-"slow acceleration",
-],
-},
-{
-label: "misfire / shaking",
-words: ["misfire", "shaking", "rough idle", "vibration", "jerking"],
-},
-{
-label: "turbo / boost issue",
-words: ["turbo", "boost", "whistle", "underboost", "boost leak"],
-},
-{
-label: "electrical / charging issue",
-words: ["battery light", "alternator", "charging", "electrical", "no crank"],
-},
-{
-label: "oil pressure risk",
-words: ["oil pressure", "red oil light", "oil light"],
-},
-{
-label: "transmission / drivability issue",
-words: ["transmission", "gear", "shifting", "slipping", "hard shift"],
-},
-{
-label: "starting system issue",
-words: ["no start", "won't start", "does not start", "crank", "starter"],
-},
-];
+  const rules = [
+    {
+      label: "black smoke / rich running",
+      words: ["black smoke", "dark smoke", "rich", "running rich"],
+    },
+    {
+      label: "fuel smell / raw fuel",
+      words: [
+        "fuel smell",
+        "gas smell",
+        "raw fuel",
+        "smells like gas",
+        "gasoline smell",
+        "strong fuel",
+      ],
+    },
+    {
+      label: "overheating / cooling risk",
+      words: [
+        "overheat",
+        "overheating",
+        "temperature high",
+        "temp gauge",
+        "steam",
+        "coolant",
+      ],
+    },
+    {
+      label: "burning smell / smoke safety risk",
+      words: [
+        "burning smell",
+        "smells burnt",
+        "burnt smell",
+        "smoke from engine",
+        "electrical burning",
+      ],
+    },
+    {
+      label: "brake safety risk",
+      words: [
+        "brake",
+        "brakes",
+        "low brake pedal",
+        "soft brake pedal",
+        "brake fluid",
+        "grinding brakes",
+      ],
+    },
+    {
+      label: "stalling while driving",
+      words: ["stall while driving", "dies while driving", "shuts off while driving"],
+    },
+    {
+      label: "severe power loss",
+      words: [
+        "loss of power",
+        "no power",
+        "limp mode",
+        "won't accelerate",
+        "slow acceleration",
+        "weak acceleration",
+      ],
+    },
+    {
+      label: "misfire / shaking",
+      words: [
+        "misfire",
+        "shaking",
+        "rough idle",
+        "vibration",
+        "jerking",
+        "shakes at idle",
+      ],
+    },
+    {
+      label: "turbo / boost issue",
+      words: ["turbo", "boost", "whistle", "underboost", "boost leak"],
+    },
+    {
+      label: "electrical / charging issue",
+      words: ["battery light", "alternator", "charging", "electrical", "no crank"],
+    },
+    {
+      label: "oil pressure risk",
+      words: ["oil pressure", "red oil light", "oil light"],
+    },
+    {
+      label: "transmission / drivability issue",
+      words: ["transmission", "gear", "shifting", "slipping", "hard shift"],
+    },
+    {
+      label: "starting system issue",
+      words: ["no start", "won't start", "does not start", "crank", "starter"],
+    },
+    {
+      label: "check engine light",
+      words: ["check engine", "engine light", "cel", "service engine"],
+    },
+  ];
 
-for (const rule of rules) {
-if (rule.words.some((word) => combined.includes(word))) {
-signals.push(rule.label);
-}
-}
+  for (const rule of rules) {
+    if (rule.words.some((word) => combined.includes(word))) {
+      signals.push(rule.label);
+    }
+  }
 
-return [...new Set(signals)];
+  return [...new Set(signals)];
 }
 
 function detectComplexity(issue, dominantSignals, answers) {
-const text = String(issue || "").toLowerCase();
-const answerText = Array.isArray(answers)
-? answers.map((a) => `${a?.question || ""} ${a?.answer || ""}`).join(" ").toLowerCase()
-: "";
+  const text = String(issue || "").toLowerCase();
+  const answerText = Array.isArray(answers)
+    ? answers
+        .map((a) => `${a?.question || ""} ${a?.answer || ""}`)
+        .join(" ")
+        .toLowerCase()
+    : "";
 
-const allText = `${text} ${answerText}`;
+  const allText = `${text} ${answerText}`;
+  const signalCount = Array.isArray(dominantSignals) ? dominantSignals.length : 0;
 
-const highRiskWords = [
-"smoke",
-"burning",
-"overheat",
-"overheating",
-"brake",
-"oil pressure",
-"airbag",
-"srs",
-"stall",
-"dies while driving",
-"red warning",
-"fuel smell",
-"gas smell",
-"raw fuel",
-"no brakes",
-"steering locked",
-];
+  const highRiskWords = [
+    "smoke",
+    "burning",
+    "overheat",
+    "overheating",
+    "brake",
+    "oil pressure",
+    "airbag",
+    "srs",
+    "stall",
+    "dies while driving",
+    "red warning",
+    "fuel smell",
+    "gas smell",
+    "raw fuel",
+    "no brakes",
+    "steering locked",
+    "flashing check engine",
+  ];
 
-const complexWords = [
-"ac",
-"a/c",
-"air conditioning",
-"compressor",
-"cuts out",
-"intermittent",
-"module",
-"airbag",
-"srs",
-"water",
-"leak",
-"roof",
-"sunroof",
-"electrical",
-"misfire",
-"transmission",
-"overheating",
-"stall",
-"dies",
-"shakes",
-"vibration",
-"turbo",
-"boost",
-"black smoke",
-"whistle",
-"semi",
-"truck",
-];
+  const complexWords = [
+    "ac",
+    "a/c",
+    "air conditioning",
+    "compressor",
+    "cuts out",
+    "intermittent",
+    "module",
+    "airbag",
+    "srs",
+    "water",
+    "leak",
+    "roof",
+    "sunroof",
+    "electrical",
+    "misfire",
+    "transmission",
+    "overheating",
+    "stall",
+    "dies",
+    "shakes",
+    "vibration",
+    "turbo",
+    "boost",
+    "black smoke",
+    "whistle",
+    "semi",
+    "truck",
+  ];
 
-const simpleWords = [
-"maintenance",
-"oil change",
-"tire pressure",
-"wiper",
-"washer fluid",
-"light bulb",
-"gas cap",
-];
+  const simpleWords = [
+    "maintenance",
+    "oil change",
+    "tire pressure",
+    "wiper",
+    "washer fluid",
+    "light bulb",
+    "gas cap",
+  ];
 
-const signalCount = Array.isArray(dominantSignals) ? dominantSignals.length : 0;
-const isHighRiskWord = highRiskWords.some((w) => allText.includes(w));
-const isComplexWord = complexWords.some((w) => allText.includes(w));
-const isSimpleWord = simpleWords.some((w) => allText.includes(w));
+  const isHighRiskWord = highRiskWords.some((w) => allText.includes(w));
+  const isComplexWord = complexWords.some((w) => allText.includes(w));
+  const isSimpleWord = simpleWords.some((w) => allText.includes(w));
 
-if (isSimpleWord && !isHighRiskWord && signalCount === 0) {
-return {
-level: "simple low-risk symptom",
-minimumQuestions: 2,
-reason: "simple maintenance-style concern",
-};
+  if (isSimpleWord && !isHighRiskWord && signalCount === 0) {
+    return {
+      level: "simple low-risk symptom",
+      minimumQuestions: 2,
+      reason: "simple maintenance-style concern",
+    };
+  }
+
+  if (signalCount >= 4) {
+    return {
+      level: "very high complexity multi-signal case",
+      minimumQuestions: 6,
+      reason: "multiple dominant symptoms need deeper narrowing before a reliable report",
+    };
+  }
+
+  if (signalCount === 3) {
+    return {
+      level: "high complexity multi-signal case",
+      minimumQuestions: 5,
+      reason: "several strong symptom signals are present",
+    };
+  }
+
+  if (isHighRiskWord || signalCount === 2) {
+    return {
+      level: "high complexity or safety-sensitive",
+      minimumQuestions: 4,
+      reason: "safety-sensitive symptoms require controlled questioning",
+    };
+  }
+
+  if (isComplexWord || signalCount === 1) {
+    return {
+      level: "complex symptom",
+      minimumQuestions: 3,
+      reason: "the issue needs a few targeted mechanic questions",
+    };
+  }
+
+  return {
+    level: "standard symptom",
+    minimumQuestions: 2,
+    reason: "standard issue with enough room for quick narrowing",
+  };
 }
 
-if (signalCount >= 4) {
-return {
-level: "very high complexity multi-signal case",
-minimumQuestions: 6,
-reason: "multiple dominant symptoms need deeper narrowing before a reliable report",
-};
+function detectDiagnosticReadiness(issue, answers, dominantSignals, complexity) {
+  const answerCount = countUserAnswers(answers);
+  const text = [
+    String(issue || ""),
+    ...(Array.isArray(answers)
+      ? answers.map((a) => `${a?.question || ""} ${a?.answer || ""}`)
+      : []),
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  const hasFuel = includesAny(text, [
+    "fuel smell",
+    "gas smell",
+    "raw fuel",
+    "strong fuel",
+    "smells like gas",
+  ]);
+  const hasSmoke = includesAny(text, ["black smoke", "dark smoke", "smoke"]);
+  const hasRoughIdle = includesAny(text, ["rough idle", "shakes at idle", "shaking", "idle"]);
+  const hasMisfire = includesAny(text, ["misfire", "flashing", "check engine"]);
+  const hasWeakPower = includesAny(text, ["weak", "loss of power", "no power", "won't accelerate"]);
+  const hasOverheat = includesAny(text, ["overheat", "overheating", "steam", "coolant"]);
+  const hasNoStart = includesAny(text, ["no start", "won't start", "click", "crank"]);
+  const hasBrake = includesAny(text, ["brake", "pedal", "grinding brakes", "brake fluid"]);
+
+  let minimumQuestions = complexity.minimumQuestions;
+  let readyForAnalysis = false;
+  let reason = complexity.reason;
+
+  if (hasFuel && hasRoughIdle && answerCount >= 2) {
+    minimumQuestions = Math.min(minimumQuestions, 3);
+    readyForAnalysis = answerCount >= 3;
+    reason = "fuel smell plus rough idle creates a clear fuel/ignition diagnostic path";
+  }
+
+  if ((hasSmoke && hasFuel) || (hasSmoke && hasWeakPower)) {
+    minimumQuestions = Math.min(minimumQuestions, 4);
+    readyForAnalysis = answerCount >= 3;
+    reason = "smoke plus fuel or power loss is a strong overfueling pattern";
+  }
+
+  if (hasOverheat) {
+    minimumQuestions = Math.max(minimumQuestions, 4);
+    reason = "overheating needs safety and cooling-system context";
+  }
+
+  if (hasNoStart) {
+    minimumQuestions = Math.min(Math.max(minimumQuestions, 3), 4);
+    reason = "no-start cases need crank/click/power/fuel separation";
+  }
+
+  if (hasBrake) {
+    minimumQuestions = Math.max(minimumQuestions, 4);
+    reason = "brake symptoms require safety-controlled questioning";
+  }
+
+  if (hasMisfire && hasRoughIdle && answerCount >= 2) {
+    minimumQuestions = Math.min(minimumQuestions, 3);
+    readyForAnalysis = answerCount >= 3;
+    reason = "rough idle plus misfire/check-engine context is enough for a focused report";
+  }
+
+  if (answerCount >= minimumQuestions) {
+    readyForAnalysis = true;
+  }
+
+  minimumQuestions = clamp(minimumQuestions, 2, 6);
+
+  return {
+    minimumQuestions,
+    readyForAnalysis,
+    reason,
+  };
 }
 
-if (signalCount === 3) {
-return {
-level: "high complexity multi-signal case",
-minimumQuestions: 5,
-reason: "several strong symptom signals are present",
-};
+function includesAny(text, words) {
+  return words.some((w) => text.includes(w));
 }
 
-if (isHighRiskWord || signalCount === 2) {
-return {
-level: "high complexity or safety-sensitive",
-minimumQuestions: 4,
-reason: "safety-sensitive symptoms require controlled questioning",
-};
-}
-
-if (isComplexWord || signalCount === 1) {
-return {
-level: "complex symptom",
-minimumQuestions: 3,
-reason: "the issue needs a few targeted mechanic questions",
-};
-}
-
-return {
-level: "standard symptom",
-minimumQuestions: 2,
-reason: "standard issue with enough room for quick narrowing",
-};
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
 
 function buildVehicleText(profile) {
-if (!profile || typeof profile !== "object") return "Unknown vehicle.";
+  if (!profile || typeof profile !== "object") return "Unknown vehicle.";
 
-const year = String(profile.year || "").trim();
-const make = String(profile.make || "").trim();
-const model = String(profile.model || "").trim();
-const mileage = String(profile.mileage || "").trim();
+  const year = String(profile.year || "").trim();
+  const make = String(profile.make || "").trim();
+  const model = String(profile.model || "").trim();
+  const mileage = String(profile.mileage || "").trim();
 
-const parts = [];
-if (year) parts.push(`Year: ${year}`);
-if (make) parts.push(`Make: ${make}`);
-if (model) parts.push(`Model: ${model}`);
-if (mileage) parts.push(`Mileage: ${mileage}`);
+  const parts = [];
+  if (year) parts.push(`Year: ${year}`);
+  if (make) parts.push(`Make: ${make}`);
+  if (model) parts.push(`Model: ${model}`);
+  if (mileage) parts.push(`Mileage: ${mileage}`);
 
-return parts.length ? parts.join(", ") : "Unknown vehicle.";
+  return parts.length ? parts.join(", ") : "Unknown vehicle.";
 }
 
 function extractText(data) {
-try {
-if (data.output_text) return data.output_text;
+  try {
+    if (data.output_text) return data.output_text;
 
-if (Array.isArray(data.output)) {
-return data.output
-.flatMap((item) => item.content || [])
-.map((content) => content.text || "")
-.join("\n")
-.trim();
-}
+    if (Array.isArray(data.output)) {
+      return data.output
+        .flatMap((item) => item.content || [])
+        .map((content) => content.text || "")
+        .join("\n")
+        .trim();
+    }
 
-return "";
-} catch {
-return "";
-}
+    return "";
+  } catch {
+    return "";
+  }
 }
 
 function normalizeStatusLine(text, shouldAskFollowUp) {
-const desired = shouldAskFollowUp
-? "Diagnosis status: follow_up"
-: "Diagnosis status: analysis";
+  const desired = shouldAskFollowUp
+    ? "Diagnosis status: follow_up"
+    : "Diagnosis status: analysis";
 
-let clean = String(text || "").trim();
+  let clean = String(text || "").trim();
 
-if (/Diagnosis status:/i.test(clean)) {
-clean = clean.replace(
-/Diagnosis status:\s*(follow_up|analysis|final)/i,
-desired
-);
-} else {
-clean = `${desired}\n\n${clean}`;
-}
+  if (/Diagnosis status:/i.test(clean)) {
+    clean = clean.replace(
+      /Diagnosis status:\s*(follow_up|analysis|final)/i,
+      desired
+    );
+  } else {
+    clean = `${desired}\n\n${clean}`;
+  }
 
-return clean.trim();
+  return clean.trim();
 }
 
 function ensureRequiredFormat(text, lang, shouldAskFollowUp) {
-const clean = String(text || "").trim();
+  const clean = String(text || "").trim();
 
-const required = [
-"Diagnosis status:",
-"Voice summary:",
-"Confidence:",
-"Risk level:",
-"Likely issue:",
-"Why it fits:",
-"What to do next:",
-"When to stop driving:",
-];
+  const required = [
+    "Diagnosis status:",
+    "Voice summary:",
+    "Confidence:",
+    "Risk level:",
+    "Likely issue:",
+    "Why it fits:",
+    "What to do next:",
+    "When to stop driving:",
+  ];
 
-if (shouldAskFollowUp) required.push("Answer options:");
+  if (shouldAskFollowUp) required.push("Answer options:");
 
-const hasAll = required.every((label) =>
-clean.toLowerCase().includes(label.toLowerCase())
-);
+  const hasAll = required.every((label) =>
+    clean.toLowerCase().includes(label.toLowerCase())
+  );
 
-if (hasAll) return clean;
+  if (hasAll) return clean;
 
-return shouldAskFollowUp ? fallbackFollowUp(lang) : fallbackAnalysis(lang);
+  return shouldAskFollowUp ? fallbackFollowUp(lang) : fallbackAnalysis(lang);
 }
 
 function enforceAnswerOptionCount(text, lang, shouldAskFollowUp) {
-if (!shouldAskFollowUp) return text;
+  const lower = text.toLowerCase();
 
-const lower = text.toLowerCase();
-const marker = "answer options:";
-const stopMarker = "when to stop driving:";
+  if (!shouldAskFollowUp) {
+    if (!lower.includes("answer options:")) {
+      return `${text.trim()}\n\nAnswer options:\nNone`;
+    }
 
-const start = lower.indexOf(marker);
-const stop = lower.indexOf(stopMarker);
+    return text.replace(
+      /Answer options:\s*([\s\S]*?)(?=When to stop driving:)/i,
+      "Answer options:\nNone\n\n"
+    );
+  }
 
-if (start === -1 || stop === -1 || stop <= start) {
-return fallbackFollowUp(lang);
-}
+  const marker = "answer options:";
+  const stopMarker = "when to stop driving:";
 
-const before = text.substring(0, start + marker.length).trimEnd();
-const optionsRaw = text.substring(start + marker.length, stop).trim();
-const after = text.substring(stop).trimStart();
+  const start = lower.indexOf(marker);
+  const stop = lower.indexOf(stopMarker);
 
-const options = optionsRaw
-.split("\n")
-.map((line) => line.replace(/^\s*[-•\d.)]+\s*/, "").trim())
-.filter((line) => line && line.toLowerCase() !== "none")
-.slice(0, 4);
+  if (start === -1 || stop === -1 || stop <= start) {
+    return fallbackFollowUp(lang);
+  }
 
-if (options.length !== 4) {
-return fallbackFollowUp(lang);
-}
+  const before = text.substring(0, start + marker.length).trimEnd();
+  const optionsRaw = text.substring(start + marker.length, stop).trim();
+  const after = text.substring(stop).trimStart();
 
-return `${before}\n${options.join("\n")}\n\n${after}`.trim();
+  const options = optionsRaw
+    .split("\n")
+    .map((line) => line.replace(/^\s*[-•\d.)]+\s*/, "").trim())
+    .filter((line) => line && line.toLowerCase() !== "none")
+    .slice(0, 4);
+
+  if (options.length !== 4) {
+    return fallbackFollowUp(lang);
+  }
+
+  return `${before}\n${options.join("\n")}\n\n${after}`.trim();
 }
 
 function fallbackFollowUp(lang) {
-if (lang === "es") {
-return `Diagnosis status: follow_up
+  if (lang === "es") {
+    return `Diagnosis status: follow_up
 
 Voice summary:
-Necesito un detalle más para separar las causas probables.
+Necesito separar la causa probable con una pregunta más.
 
 Confidence:
 50
@@ -587,22 +712,22 @@ Likely issue:
 Still narrowing the issue.
 
 Why it fits:
-La información actual todavía no es suficiente para separar las causas posibles.
+La información actual todavía no es suficiente para separar las causas principales.
 
 What to do next:
-¿Cuándo ocurre exactamente el problema?
+¿El motor tiembla más cuando está frío o cuando ya está caliente?
 
 Answer options:
-Al encender
-Mientras manejo
-Al frenar o acelerar
+Más cuando está frío
+Más cuando está caliente
+Tiembla igual todo el tiempo
 No sé
 
 When to stop driving:
 Deja de manejar si el auto se siente inseguro, se sobrecalienta, huele a quemado, pierde potencia fuerte, o aparece una luz roja de advertencia.`;
-}
+  }
 
-return `Diagnosis status: follow_up
+  return `Diagnosis status: follow_up
 
 Voice summary:
 I need one more detail to separate the likely causes.
@@ -617,15 +742,15 @@ Likely issue:
 Still narrowing the issue.
 
 Why it fits:
-The current information is not enough yet to separate the possible causes.
+The current information is not enough yet to separate the main causes.
 
 What to do next:
-When exactly does the problem happen?
+Does the engine shake more when it is cold or after it warms up?
 
 Answer options:
-At startup
-While driving
-When braking or accelerating
+More when cold
+More when warm
+It shakes the same all the time
 Not sure
 
 When to stop driving:
@@ -633,11 +758,11 @@ Stop driving if the car feels unsafe, overheats, smells like burning, loses stro
 }
 
 function fallbackAnalysis(lang) {
-if (lang === "es") {
-return `Diagnosis status: analysis
+  if (lang === "es") {
+    return `Diagnosis status: analysis
 
 Voice summary:
-DriveShift encontró una causa probable, pero conviene confirmar con una revisión básica.
+DriveShift encontró una dirección probable, pero conviene confirmarla con una revisión básica.
 
 Confidence:
 60
@@ -659,9 +784,9 @@ None
 
 When to stop driving:
 Deja de manejar si el auto se siente inseguro, se sobrecalienta, vibra fuerte, huele a quemado, o aparece una luz roja de advertencia.`;
-}
+  }
 
-return `Diagnosis status: analysis
+  return `Diagnosis status: analysis
 
 Voice summary:
 DriveShift found a likely direction, but it should be confirmed with basic checks.
