@@ -1,413 +1,252 @@
-export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ result: "Method not allowed" });
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+
+class AiService {
+  static const String _baseUrl = 'https://driveshift-ai-backend.vercel.app';
+
+  // =========================
+  // TEXT DIAGNOSIS
+  // =========================
+  static Future<String> diagnoseCarIssue({
+    required String issue,
+    required bool isEnglish,
+    required List<Map<String, String>> answers,
+  }) async {
+    final url = Uri.parse('$_baseUrl/api/diagnose');
+
+    try {
+      final vehicleProfile = await _loadVehicleProfile();
+
+      final enhancedAnswers = _mergeVehicleProfileWithAnswers(
+        answers: answers,
+        vehicleProfile: vehicleProfile,
+      );
+
+      final body = {
+        'app': 'DriveShift',
+        'issue': issue.trim(),
+        'language': isEnglish ? 'en' : 'es',
+        'vehicleProfile': vehicleProfile,
+        'answers': enhancedAnswers,
+        'mode': 'diagnostic_flow',
+        'timestamp': DateTime.now().toIso8601String(),
+      };
+
+      final response = await http
+          .post(
+            url,
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 35));
+
+      if (response.statusCode != 200) {
+        throw AiServiceException(
+          isEnglish
+              ? 'DriveShift could not reach the diagnostic engine.'
+              : 'DriveShift no pudo conectar con el motor de diagnóstico.',
+        );
+      }
+
+      final decoded = jsonDecode(response.body);
+      final result = _extractResult(decoded);
+
+      if (result.isEmpty || _isBadFallback(result)) {
+        throw AiServiceException(
+          isEnglish
+              ? 'DriveShift needs a bit more detail before continuing.'
+              : 'DriveShift necesita un poco más de información.',
+        );
+      }
+
+      return _cleanOutput(result);
+    } on AiServiceException {
+      rethrow;
+    } catch (_) {
+      throw AiServiceException(
+        isEnglish
+            ? 'Connection issue. Please try again.'
+            : 'Problema de conexión. Inténtalo de nuevo.',
+      );
+    }
   }
 
-  try {
-    const { issue, answers, language, vehicleProfile } = req.body;
+  // =========================
+  // IMAGE AI
+  // =========================
+  static Future<String> analyzeWarningLightImage({
+    required File imageFile,
+    required bool isEnglish,
+    String? detectedText,
+  }) async {
+    final url = Uri.parse('$_baseUrl/api/diagnose-image');
 
-    const lang = language === "es" ? "es" : "en";
-    const safeIssue = String(issue || "").trim();
-    const answerList = Array.isArray(answers) ? answers : [];
-    const profile = vehicleProfile || {};
+    try {
+      final vehicleProfile = await _loadVehicleProfile();
 
-    if (!safeIssue) {
-      return res.status(200).json({ result: fallbackFollowUp(lang) });
+      final bytes = await imageFile.readAsBytes();
+      final base64Image = base64Encode(bytes);
+
+      final response = await http
+          .post(
+            url,
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: jsonEncode({
+              'app': 'DriveShift',
+              'type': 'vision',
+              'image': base64Image,
+              'detectedText': detectedText ?? '',
+              'language': isEnglish ? 'en' : 'es',
+              'vehicleProfile': vehicleProfile,
+              'mode': 'diagnostic_flow',
+            }),
+          )
+          .timeout(const Duration(seconds: 55));
+
+      if (response.statusCode != 200) {
+        throw AiServiceException(
+          isEnglish
+              ? 'DriveShift could not analyze the image.'
+              : 'DriveShift no pudo analizar la imagen.',
+        );
+      }
+
+      final decoded = jsonDecode(response.body);
+      final result = _extractResult(decoded);
+
+      if (result.isEmpty || _isBadFallback(result)) {
+        throw AiServiceException(
+          isEnglish
+              ? 'DriveShift needs a clearer image.'
+              : 'DriveShift necesita una imagen más clara.',
+        );
+      }
+
+      return _cleanOutput(result);
+    } on AiServiceException {
+      rethrow;
+    } catch (_) {
+      throw AiServiceException(
+        isEnglish
+            ? 'Connection issue. Please try again.'
+            : 'Problema de conexión. Inténtalo de nuevo.',
+      );
     }
+  }
 
-    const possibleObdCode = safeIssue.match(/\b[PCBU][0-9A-F]{4}\b/i);
-    const hasObdCode = Boolean(possibleObdCode);
-    const obdCode = hasObdCode ? possibleObdCode[0].toUpperCase() : "";
+  // =========================
+  // VEHICLE MEMORY
+  // =========================
+  static Future<Map<String, String>> _loadVehicleProfile() async {
+    final prefs = await SharedPreferences.getInstance();
 
-    const realAnswerCount = countUserAnswers(answerList);
-    const complexity = detectComplexity(safeIssue);
-    const minimumQuestions = hasObdCode ? 0 : complexity.minimumQuestions;
-    const shouldAskFollowUp = !hasObdCode && realAnswerCount < minimumQuestions;
+    return {
+      'year': prefs.getString('vehicle_year')?.trim() ?? '',
+      'make': prefs.getString('vehicle_make')?.trim() ?? '',
+      'model': prefs.getString('vehicle_model')?.trim() ?? '',
+      'mileage': prefs.getString('vehicle_mileage')?.trim() ?? '',
+    };
+  }
 
-    const userInput =
-      answerList.length > 0
-        ? answerList
-            .map((a, index) => {
-              const q = String(a.question || `Question ${index + 1}`).trim();
-              const ans = String(a.answer || "").trim();
-              return `${index + 1}. ${q}: ${ans}`;
-            })
-            .join("\n")
-        : "No additional answers yet.";
+  static List<Map<String, String>> _mergeVehicleProfileWithAnswers({
+    required List<Map<String, String>> answers,
+    required Map<String, String> vehicleProfile,
+  }) {
+    final enhanced = List<Map<String, String>>.from(answers);
 
-    const vehicleText = buildVehicleText(profile);
+    final hasVehicleInfo =
+        vehicleProfile.values.any((value) => value.trim().isNotEmpty);
 
-    const prompt = `
-You are DriveShift Doctor, a calm senior automotive diagnostic mechanic.
-
-You are not a chatbot. You behave like a real diagnostic mechanic:
-you ask the right questions first, then give a careful report only when enough information exists.
-
-Language:
-${lang === "es" ? "Spanish" : "English"}
-
-Original problem:
-${safeIssue}
-
-Vehicle profile:
-${vehicleText}
-
-Conversation so far:
-${userInput}
-
-Detected OBD code:
-${hasObdCode ? obdCode : "None"}
-
-Diagnostic complexity:
-${complexity.level}
-
-Required minimum answered questions before final report:
-${minimumQuestions}
-
-Current answered questions:
-${realAnswerCount}
-
-Current mode:
-${shouldAskFollowUp ? "follow_up" : "analysis"}
-
-Rules for follow_up mode:
-Ask exactly ONE smart mechanic question.
-The question must be specific to the user's problem.
-Do not repeat previous questions.
-Do not diagnose yet.
-Do not give repair steps yet.
-You MUST provide exactly 4 short answer options.
-The 4 answer options must match the question exactly.
-The answer options must be practical driver observations, not repair instructions.
-Do not include safety advice inside the question.
-
-Examples:
-If turbo/boost/power loss/black smoke/whistle: options may be Boost drops suddenly, Whistle under load, Black smoke under load, Not sure.
-If AC issue: options may be Only at idle, While driving, When AC turns on, Not sure.
-If water leak: options may be After rain, Car wash, Near roof/sunroof, Floor area.
-If airbag/SRS/module: options may be Light stays on, Comes and goes, After battery work, Not sure.
-If vague or unclear wording: ask what the user means and provide clarification options.
-
-Rules for analysis mode:
-Give a professional diagnosis report.
-Do not pretend certainty.
-Give the most likely issue first.
-Explain why it fits the user's symptoms.
-Give practical next checks.
-Give clear safety advice.
-If multiple systems could be involved, mention the top 2 possibilities calmly.
-
-Style:
-Calm, practical, premium, human mechanic.
-No markdown.
-No bullets.
-No numbered lists.
-Do not mention AI.
-Do not say "as an AI".
-Do not over-scare the driver.
-
-Output exactly this format:
-
-Diagnosis status: ${shouldAskFollowUp ? "follow_up" : "analysis"}
-
-Voice summary:
-[short natural mechanic speech]
-
-Confidence:
-[number 0-100]
-
-Risk level:
-[High or Medium or Low]
-
-Likely issue:
-[if follow_up: Still narrowing the issue. If analysis: short likely issue]
-
-Why it fits:
-[if follow_up: Need one more detail before a reliable diagnosis. If analysis: short explanation]
-
-What to do next:
-[if follow_up: one clear follow-up question only. If analysis: practical next steps]
-
-Answer options:
-[option 1]
-[option 2]
-[option 3]
-[option 4]
-
-When to stop driving:
-[clear safety advice]
-`;
-
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: process.env.DRIVESHIFT_MODEL || "gpt-4o",
-        input: prompt,
-        temperature: 0.12,
-        max_output_tokens: shouldAskFollowUp ? 420 : 760,
-      }),
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      return res.status(500).json({
-        result: shouldAskFollowUp ? fallbackFollowUp(lang) : fallbackAnalysis(lang),
+    if (hasVehicleInfo) {
+      enhanced.insert(0, {
+        'question': 'Vehicle profile',
+        'answer': _vehicleProfileText(vehicleProfile),
       });
     }
 
-    let text = extractText(data).trim();
-
-    if (!text) {
-      return res.status(200).json({
-        result: shouldAskFollowUp ? fallbackFollowUp(lang) : fallbackAnalysis(lang),
-      });
-    }
-
-    text = normalizeStatusLine(text, shouldAskFollowUp);
-    text = ensureRequiredFormat(text, lang, shouldAskFollowUp);
-
-    return res.status(200).json({ result: text });
-  } catch (error) {
-    return res.status(500).json({
-      result: fallbackFollowUp("en"),
-    });
-  }
-}
-
-function countUserAnswers(answers) {
-  if (!Array.isArray(answers)) return 0;
-
-  return answers.filter((item) => {
-    const answer = String(item?.answer || "").trim();
-    return answer.length > 0;
-  }).length;
-}
-
-function detectComplexity(issue) {
-  const text = String(issue || "").toLowerCase();
-
-  const complexWords = [
-    "ac", "a/c", "air conditioning", "compressor", "cuts out",
-    "intermittent", "module", "airbag", "srs", "water", "leak",
-    "roof", "sunroof", "electrical", "misfire", "transmission",
-    "overheating", "stall", "dies", "shakes", "vibration",
-    "turbo", "boost", "black smoke", "whistle", "semi", "truck"
-  ];
-
-  const highRiskWords = [
-    "smoke", "burning", "overheat", "overheating", "brake",
-    "oil pressure", "airbag", "srs", "stall", "dies while driving"
-  ];
-
-  const isComplex = complexWords.some((w) => text.includes(w));
-  const isHighRisk = highRiskWords.some((w) => text.includes(w));
-
-  if (isHighRisk) {
-    return { level: "high complexity or safety-sensitive", minimumQuestions: 4 };
+    return enhanced;
   }
 
-  if (isComplex) {
-    return { level: "complex symptom", minimumQuestions: 4 };
+  static String _vehicleProfileText(Map<String, String> profile) {
+    final year =
+        profile['year']?.isNotEmpty == true ? profile['year']! : 'Unknown year';
+    final make =
+        profile['make']?.isNotEmpty == true ? profile['make']! : 'Unknown make';
+    final model = profile['model']?.isNotEmpty == true
+        ? profile['model']!
+        : 'Unknown model';
+    final mileage = profile['mileage']?.isNotEmpty == true
+        ? '${profile['mileage']} miles'
+        : 'Unknown mileage';
+
+    return '$year $make $model, $mileage';
   }
 
-  return { level: "standard symptom", minimumQuestions: 3 };
-}
+  // =========================
+  // EXTRACT RESULT
+  // =========================
+  static String _extractResult(dynamic decoded) {
+    if (decoded is! Map) return '';
 
-function buildVehicleText(profile) {
-  if (!profile || typeof profile !== "object") return "Unknown vehicle.";
-
-  const year = String(profile.year || "").trim();
-  const make = String(profile.make || "").trim();
-  const model = String(profile.model || "").trim();
-  const mileage = String(profile.mileage || "").trim();
-
-  const parts = [];
-  if (year) parts.push(`Year: ${year}`);
-  if (make) parts.push(`Make: ${make}`);
-  if (model) parts.push(`Model: ${model}`);
-  if (mileage) parts.push(`Mileage: ${mileage}`);
-
-  return parts.length ? parts.join(", ") : "Unknown vehicle.";
-}
-
-function extractText(data) {
-  try {
-    if (data.output_text) return data.output_text;
-
-    if (Array.isArray(data.output)) {
-      return data.output
-        .flatMap((item) => item.content || [])
-        .map((content) => content.text || "")
-        .join("\n")
+    return (decoded['result'] ??
+            decoded['diagnosis'] ??
+            decoded['message'] ??
+            decoded['text'] ??
+            '')
+        .toString()
         .trim();
-    }
+  }
 
-    return "";
-  } catch {
-    return "";
+  // =========================
+  // QUALITY GUARD
+  // =========================
+  static bool _isBadFallback(String text) {
+    final lower = text.toLowerCase().trim();
+
+    if (lower.isEmpty) return true;
+
+    final badPhrases = [
+      'connection issue',
+      'please try again',
+      'no internet',
+      'incomplete response',
+      'error de conexión',
+      'inténtalo de nuevo',
+    ];
+
+    return badPhrases.any(lower.contains);
+  }
+
+  // =========================
+  // CLEAN OUTPUT
+  // =========================
+  static String _cleanOutput(String input) {
+    return input
+        .replaceAll('**', '')
+        .replaceAll('__', '')
+        .replaceAll('`', '')
+        .replaceAll(RegExp(r'\n{3,}'), '\n\n')
+        .trim();
   }
 }
 
-function normalizeStatusLine(text, shouldAskFollowUp) {
-  const desired = shouldAskFollowUp
-    ? "Diagnosis status: follow_up"
-    : "Diagnosis status: analysis";
+// =========================
+// AI SERVICE EXCEPTION
+// =========================
+class AiServiceException implements Exception {
+  final String message;
 
-  let clean = String(text || "").trim();
+  AiServiceException(this.message);
 
-  if (/Diagnosis status:/i.test(clean)) {
-    clean = clean.replace(/Diagnosis status:\s*(follow_up|analysis|final)/i, desired);
-  } else {
-    clean = `${desired}\n\n${clean}`;
-  }
-
-  return clean.trim();
-}
-
-function ensureRequiredFormat(text, lang, shouldAskFollowUp) {
-  const clean = String(text || "").trim();
-
-  const required = [
-    "Diagnosis status:",
-    "Voice summary:",
-    "Confidence:",
-    "Risk level:",
-    "Likely issue:",
-    "Why it fits:",
-    "What to do next:",
-    "When to stop driving:",
-  ];
-
-  if (shouldAskFollowUp) required.push("Answer options:");
-
-  const hasAll = required.every((label) =>
-    clean.toLowerCase().includes(label.toLowerCase())
-  );
-
-  if (hasAll) return clean;
-
-  return shouldAskFollowUp ? fallbackFollowUp(lang) : fallbackAnalysis(lang);
-}
-
-function fallbackFollowUp(lang) {
-  if (lang === "es") {
-    return `Diagnosis status: follow_up
-
-Voice summary:
-Necesito un detalle más antes de darte un diagnóstico confiable.
-
-Confidence:
-50
-
-Risk level:
-Medium
-
-Likely issue:
-Still narrowing the issue.
-
-Why it fits:
-La información actual todavía no es suficiente para separar las causas posibles.
-
-What to do next:
-¿Cuándo ocurre exactamente el problema?
-
-Answer options:
-Al encender
-Mientras manejo
-Al frenar o acelerar
-No sé
-
-When to stop driving:
-Deja de manejar si el auto se siente inseguro, se sobrecalienta, huele a quemado, pierde potencia fuerte, o aparece una luz roja de advertencia.`;
-  }
-
-  return `Diagnosis status: follow_up
-
-Voice summary:
-I need one more detail before giving you a reliable diagnosis.
-
-Confidence:
-50
-
-Risk level:
-Medium
-
-Likely issue:
-Still narrowing the issue.
-
-Why it fits:
-The current information is not enough yet to separate the possible causes.
-
-What to do next:
-When exactly does the problem happen?
-
-Answer options:
-At startup
-While driving
-When braking or accelerating
-Not sure
-
-When to stop driving:
-Stop driving if the car feels unsafe, overheats, smells like burning, loses strong power, or shows a red warning light.`;
-}
-
-function fallbackAnalysis(lang) {
-  if (lang === "es") {
-    return `Diagnosis status: analysis
-
-Voice summary:
-DriveShift encontró una posible causa, pero conviene revisar lo básico primero.
-
-Confidence:
-60
-
-Risk level:
-Medium
-
-Likely issue:
-Possible vehicle system fault that needs inspection.
-
-Why it fits:
-Los síntomas indican que un sistema del vehículo no está funcionando de forma normal.
-
-What to do next:
-Revisa luces, sonidos, olores, fugas, pérdida de potencia o vibración. Si continúa, haz un escaneo OBD y una inspección profesional.
-
-Answer options:
-None
-
-When to stop driving:
-Deja de manejar si el auto se siente inseguro, se sobrecalienta, vibra fuerte, huele a quemado, o aparece una luz roja de advertencia.`;
-  }
-
-  return `Diagnosis status: analysis
-
-Voice summary:
-DriveShift found a possible issue, but start with the basic checks first.
-
-Confidence:
-60
-
-Risk level:
-Medium
-
-Likely issue:
-Possible vehicle system fault that needs inspection.
-
-Why it fits:
-The symptoms suggest one vehicle system is not behaving normally.
-
-What to do next:
-Check for warning lights, sounds, smells, leaks, power loss, or vibration. If it continues, get an OBD scan and a professional inspection.
-
-Answer options:
-None
-
-When to stop driving:
-Stop driving if the car feels unsafe, overheats, shakes badly, smells like burning, or shows a red warning light.`;
+  @override
+  String toString() => message;
 }
