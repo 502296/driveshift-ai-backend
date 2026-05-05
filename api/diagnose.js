@@ -12,9 +12,7 @@ export default async function handler(req, res) {
     const profile = vehicleProfile || {};
 
     if (!safeIssue) {
-      return res.status(200).json({
-        result: fallbackFollowUp(lang),
-      });
+      return res.status(200).json({ result: fallbackFollowUp(lang) });
     }
 
     const possibleObdCode = safeIssue.match(/\b[PCBU][0-9A-F]{4}\b/i);
@@ -24,7 +22,6 @@ export default async function handler(req, res) {
     const realAnswerCount = countUserAnswers(answerList);
     const complexity = detectComplexity(safeIssue);
     const minimumQuestions = hasObdCode ? 0 : complexity.minimumQuestions;
-
     const shouldAskFollowUp = !hasObdCode && realAnswerCount < minimumQuestions;
 
     const userInput =
@@ -78,14 +75,18 @@ Ask exactly ONE smart mechanic question.
 The question must be specific to the user's problem.
 Do not repeat previous questions.
 Do not diagnose yet.
-Do not give likely causes yet.
 Do not give repair steps yet.
-If the problem involves AC, ask about idle, compressor engagement, cooling performance, belt noise, RPM drop, or when it cuts out.
-If the problem involves airbag/SRS/module, ask about warning light behavior, recent battery work, water intrusion, scan codes, seat connectors, or collision history.
-If the problem involves water leaks, ask where water appears, rain/car wash timing, sunroof/drain area, windshield, roof seam, or floor location.
-If the problem involves shaking, ask when it happens: idle, braking, acceleration, speed, turning, AC on/off.
-If the problem involves warning lights, ask whether steady/flashing and how the vehicle drives.
-If the problem involves starting, ask about click/crank/dashboard lights/battery age.
+You MUST provide exactly 4 short answer options.
+The 4 answer options must match the question exactly.
+The answer options must be practical driver observations, not repair instructions.
+Do not include safety advice inside the question.
+
+Examples:
+If turbo/boost/power loss/black smoke/whistle: options may be Boost drops suddenly, Whistle under load, Black smoke under load, Not sure.
+If AC issue: options may be Only at idle, While driving, When AC turns on, Not sure.
+If water leak: options may be After rain, Car wash, Near roof/sunroof, Floor area.
+If airbag/SRS/module: options may be Light stays on, Comes and goes, After battery work, Not sure.
+If vague or unclear wording: ask what the user means and provide clarification options.
 
 Rules for analysis mode:
 Give a professional diagnosis report.
@@ -127,6 +128,12 @@ Why it fits:
 What to do next:
 [if follow_up: one clear follow-up question only. If analysis: practical next steps]
 
+Answer options:
+[option 1]
+[option 2]
+[option 3]
+[option 4]
+
 When to stop driving:
 [clear safety advice]
 `;
@@ -140,8 +147,8 @@ When to stop driving:
       body: JSON.stringify({
         model: process.env.DRIVESHIFT_MODEL || "gpt-4o",
         input: prompt,
-        temperature: 0.15,
-        max_output_tokens: shouldAskFollowUp ? 360 : 700,
+        temperature: 0.12,
+        max_output_tokens: shouldAskFollowUp ? 420 : 760,
       }),
     });
 
@@ -176,12 +183,7 @@ function countUserAnswers(answers) {
   if (!Array.isArray(answers)) return 0;
 
   return answers.filter((item) => {
-    const answer = String(item?.answer || "").trim().toLowerCase();
-
-    if (!answer) return false;
-    if (answer === "not sure") return true;
-    if (answer === "no sé") return true;
-
+    const answer = String(item?.answer || "").trim();
     return answer.length > 0;
   }).length;
 }
@@ -190,67 +192,30 @@ function detectComplexity(issue) {
   const text = String(issue || "").toLowerCase();
 
   const complexWords = [
-    "ac",
-    "a/c",
-    "air conditioning",
-    "air conditioner",
-    "compressor",
-    "cuts out",
-    "cutting out",
-    "intermittent",
-    "sometimes",
-    "module",
-    "airbag",
-    "srs",
-    "water",
-    "leak",
-    "roof",
-    "sunroof",
-    "electrical",
-    "short",
-    "misfire",
-    "transmission",
-    "overheating",
-    "stall",
-    "dies",
-    "shakes",
-    "vibration",
+    "ac", "a/c", "air conditioning", "compressor", "cuts out",
+    "intermittent", "module", "airbag", "srs", "water", "leak",
+    "roof", "sunroof", "electrical", "misfire", "transmission",
+    "overheating", "stall", "dies", "shakes", "vibration",
+    "turbo", "boost", "black smoke", "whistle", "semi", "truck"
   ];
 
   const highRiskWords = [
-    "smoke",
-    "burning",
-    "overheat",
-    "overheating",
-    "brake",
-    "oil pressure",
-    "airbag",
-    "srs",
-    "stall",
-    "dies while driving",
+    "smoke", "burning", "overheat", "overheating", "brake",
+    "oil pressure", "airbag", "srs", "stall", "dies while driving"
   ];
 
   const isComplex = complexWords.some((w) => text.includes(w));
   const isHighRisk = highRiskWords.some((w) => text.includes(w));
 
   if (isHighRisk) {
-    return {
-      level: "high complexity or safety-sensitive",
-      minimumQuestions: 4,
-    };
+    return { level: "high complexity or safety-sensitive", minimumQuestions: 4 };
   }
 
   if (isComplex) {
-    return {
-      level: "complex symptom",
-      minimumQuestions: 4,
-    };
+    return { level: "complex symptom", minimumQuestions: 4 };
   }
 
-  return {
-    level: "standard symptom",
-    minimumQuestions: 3,
-  };
+  return { level: "standard symptom", minimumQuestions: 3 };
 }
 
 function buildVehicleText(profile) {
@@ -262,7 +227,6 @@ function buildVehicleText(profile) {
   const mileage = String(profile.mileage || "").trim();
 
   const parts = [];
-
   if (year) parts.push(`Year: ${year}`);
   if (make) parts.push(`Make: ${make}`);
   if (model) parts.push(`Model: ${model}`);
@@ -306,7 +270,7 @@ function normalizeStatusLine(text, shouldAskFollowUp) {
 }
 
 function ensureRequiredFormat(text, lang, shouldAskFollowUp) {
-  let clean = String(text || "").trim();
+  const clean = String(text || "").trim();
 
   const required = [
     "Diagnosis status:",
@@ -318,6 +282,8 @@ function ensureRequiredFormat(text, lang, shouldAskFollowUp) {
     "What to do next:",
     "When to stop driving:",
   ];
+
+  if (shouldAskFollowUp) required.push("Answer options:");
 
   const hasAll = required.every((label) =>
     clean.toLowerCase().includes(label.toLowerCase())
@@ -348,7 +314,13 @@ Why it fits:
 La información actual todavía no es suficiente para separar las causas posibles.
 
 What to do next:
-¿Cuándo ocurre exactamente el problema: al encender, al manejar, al frenar, al acelerar, o cuando el auto está detenido?
+¿Cuándo ocurre exactamente el problema?
+
+Answer options:
+Al encender
+Mientras manejo
+Al frenar o acelerar
+No sé
 
 When to stop driving:
 Deja de manejar si el auto se siente inseguro, se sobrecalienta, huele a quemado, pierde potencia fuerte, o aparece una luz roja de advertencia.`;
@@ -372,7 +344,13 @@ Why it fits:
 The current information is not enough yet to separate the possible causes.
 
 What to do next:
-When exactly does the problem happen: at startup, while driving, when braking, when accelerating, or while the car is sitting still?
+When exactly does the problem happen?
+
+Answer options:
+At startup
+While driving
+When braking or accelerating
+Not sure
 
 When to stop driving:
 Stop driving if the car feels unsafe, overheats, smells like burning, loses strong power, or shows a red warning light.`;
@@ -398,7 +376,10 @@ Why it fits:
 Los síntomas indican que un sistema del vehículo no está funcionando de forma normal.
 
 What to do next:
-Revisa si hay luces en el tablero, sonidos, olores, fugas, pérdida de potencia o vibración. Si continúa, haz un escaneo OBD y una inspección profesional.
+Revisa luces, sonidos, olores, fugas, pérdida de potencia o vibración. Si continúa, haz un escaneo OBD y una inspección profesional.
+
+Answer options:
+None
 
 When to stop driving:
 Deja de manejar si el auto se siente inseguro, se sobrecalienta, vibra fuerte, huele a quemado, o aparece una luz roja de advertencia.`;
@@ -423,6 +404,9 @@ The symptoms suggest one vehicle system is not behaving normally.
 
 What to do next:
 Check for warning lights, sounds, smells, leaks, power loss, or vibration. If it continues, get an OBD scan and a professional inspection.
+
+Answer options:
+None
 
 When to stop driving:
 Stop driving if the car feels unsafe, overheats, shakes badly, smells like burning, or shows a red warning light.`;
