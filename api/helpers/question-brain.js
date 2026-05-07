@@ -1,29 +1,291 @@
 import { includesAny } from "./diagnostic-core.js";
+import { detectSystem, detectUserLevel } from "./knowledge-router.js";
 
 export function buildSmartFollowUp({ lang, issue, answers }) {
   const isEs = lang === "es";
 
-  const text = [
-    String(issue || ""),
-    ...(Array.isArray(answers)
-      ? answers.map((a) => `${a?.question || ""} ${a?.answer || ""}`)
-      : []),
-  ]
-    .join(" ")
-    .toLowerCase();
+  const text = buildText(issue, answers);
+  const asked = buildAskedText(answers);
 
-  const asked = Array.isArray(answers)
-    ? answers.map((a) => String(a?.question || "").toLowerCase()).join(" ")
-    : "";
+  const system = detectSystem(issue);
+  const userLevel = detectUserLevel(issue);
+  const advanced = userLevel === "advanced_technician";
 
   const used = (keys) => keys.some((k) => asked.includes(k));
 
-  const hasFuel = includesAny(text, ["fuel smell", "gas smell", "raw fuel", "smells like gas"]);
-  const hasSmoke = includesAny(text, ["black smoke", "dark smoke", "smoke"]);
+  // Advanced / mechanic-level routing first
+  if (advanced) {
+    const expertQuestion = buildAdvancedQuestion({
+      isEs,
+      text,
+      asked,
+      system,
+      used,
+    });
+
+    if (expertQuestion) return expertQuestion;
+  }
+
+  // System-specific driver + mixed-level routing
+  const systemQuestion = buildSystemQuestion({
+    isEs,
+    text,
+    asked,
+    system,
+    used,
+  });
+
+  if (systemQuestion) return systemQuestion;
+
+  // General driver routing
+  return buildGeneralQuestion({
+    isEs,
+    text,
+    asked,
+    used,
+  });
+}
+
+function buildAdvancedQuestion({ isEs, text, system, used }) {
+  if (system === "network_can") {
+    if (!used(["module isolation", "isolated", "disconnect", "bus load"])) {
+      return block({
+        isEs,
+        summary: isEs
+          ? "Esto parece un problema avanzado de comunicación CAN, no una falla común de sensor."
+          : "This looks like an advanced CAN communication fault, not a basic sensor issue.",
+        question: isEs
+          ? "¿La señal mejora si aíslas módulos uno por uno o sigue clipping con todos conectados?"
+          : "Does the CAN waveform improve when modules are isolated one by one, or does clipping remain with all modules connected?",
+        options: isEs
+          ? ["Mejora al aislar un módulo", "Sigue igual", "Solo falla en caliente", "No lo probé"]
+          : ["Improves when one module is isolated", "Clipping stays the same", "Only fails when warm", "Not tested yet"],
+      });
+    }
+  }
+
+  if (system === "transmission") {
+    if (!used(["line pressure", "pressure test", "slip data", "clutch volume"])) {
+      return block({
+        isEs,
+        summary: isEs
+          ? "El patrón dependiente de temperatura apunta más a presión hidráulica o sellado interno."
+          : "A temperature-dependent flare points more toward hydraulic pressure control or internal sealing.",
+        question: isEs
+          ? "¿La presión de línea o el slip del clutch cambian cuando el ATF pasa de 190°F?"
+          : "Does line pressure or clutch slip data change once ATF temperature passes 190°F?",
+        options: isEs
+          ? ["Cae la presión", "Sube el slip", "Datos normales", "No medido"]
+          : ["Line pressure drops", "Clutch slip increases", "Data stays normal", "Not measured"],
+      });
+    }
+  }
+
+  if (system === "fuel") {
+    if (!used(["injector balance", "o2 switching", "bank 1", "bank 2"])) {
+      return block({
+        isEs,
+        summary: isEs
+          ? "El lean solo en un banco necesita comparar sensor O2 e inyectores entre bancos."
+          : "A lean condition on one bank needs comparison of O2 behavior and injector delivery between banks.",
+        question: isEs
+          ? "¿Bank 1 tiene switching del O2 o balance de inyectores diferente a Bank 2?"
+          : "Does Bank 1 show different upstream O2 switching or injector balance compared with Bank 2?",
+        options: isEs
+          ? ["O2 diferente", "Injector balance diferente", "Ambos normales", "No probado"]
+          : ["O2 behavior differs", "Injector balance differs", "Both look normal", "Not tested"],
+      });
+    }
+  }
+
+  if (system === "suspension") {
+    if (!used(["calibration", "zero point", "torque sensor", "scan tool"])) {
+      return block({
+        isEs,
+        summary: isEs
+          ? "Después de cambiar steering rack, esto puede ser calibración EPS más que falla mecánica."
+          : "After steering rack replacement, this may be EPS calibration rather than a mechanical fault.",
+        question: isEs
+          ? "¿Se hizo torque sensor zero-point reset o calibración EPS con scanner?"
+          : "Was an EPS torque sensor zero-point reset or steering calibration performed with a scan tool?",
+        options: isEs
+          ? ["Sí, calibrado", "No se hizo", "Falló la calibración", "No sé"]
+          : ["Yes, calibrated", "No, not performed", "Calibration failed", "Not sure"],
+      });
+    }
+  }
+
+  if (system === "engine_noise") {
+    if (!used(["load", "oil pressure", "rpm", "frequency"])) {
+      return block({
+        isEs,
+        summary: isEs
+          ? "El tapping que cambia con RPM necesita separar valvetrain de wrist pin o bottom-end."
+          : "RPM-related tapping needs to separate valvetrain noise from wrist pin or lower-end noise.",
+        question: isEs
+          ? "¿El tapping cambia con carga del motor o solo con RPM sin carga?"
+          : "Does the tapping change with engine load, or only with RPM when unloaded?",
+        options: isEs
+          ? ["Solo con RPM", "Cambia bajo carga", "Desaparece bajo carga", "No sé"]
+          : ["Only follows RPM", "Changes under load", "Disappears under load", "Not sure"],
+      });
+    }
+  }
+
+  if (system === "brakes") {
+    if (!used(["rotor runout", "wheel bearing", "front rear", "highway"])) {
+      return block({
+        isEs,
+        summary: isEs
+          ? "La vibración al frenar en highway suele necesitar separar rotor, hub o suspensión."
+          : "Highway brake vibration needs to separate rotor runout, hub/bearing, or suspension movement.",
+        question: isEs
+          ? "¿La vibración se siente más en el volante, el pedal, o todo el vehículo?"
+          : "Is the vibration felt more in the steering wheel, brake pedal, or the whole vehicle?",
+        options: isEs
+          ? ["Volante", "Pedal", "Todo el vehículo", "No sé"]
+          : ["Steering wheel", "Brake pedal", "Whole vehicle", "Not sure"],
+      });
+    }
+  }
+
+  if (system === "airbags_srs") {
+    if (!used(["code", "clock spring", "seat", "connector"])) {
+      return block({
+        isEs,
+        summary: isEs
+          ? "Una luz SRS necesita código específico antes de culpar sensores o módulo."
+          : "An SRS light needs the exact module code before blaming sensors or the module.",
+        question: isEs
+          ? "¿El código SRS apunta a clock spring, sensor de asiento, pretensioner o módulo?"
+          : "Does the SRS code point to the clock spring, seat sensor, pretensioner, or control module?",
+        options: isEs
+          ? ["Clock spring", "Sensor de asiento", "Pretensioner", "No tengo código"]
+          : ["Clock spring", "Seat sensor", "Pretensioner", "No code yet"],
+      });
+    }
+  }
+
+  return null;
+}
+
+function buildSystemQuestion({ isEs, text, system, used }) {
+  if (system === "airbags_srs") {
+    if (!used(["srs code", "airbag code", "code"])) {
+      return block({
+        isEs,
+        summary: isEs
+          ? "La luz de airbag necesita código SRS para evitar adivinar."
+          : "An airbag light needs the SRS code to avoid guessing.",
+        question: isEs
+          ? "¿Tienes el código del sistema SRS o solo aparece la luz?"
+          : "Do you have the SRS/airbag code, or is it only the warning light?",
+        options: isEs
+          ? ["Tengo código", "Solo luz", "Después de reparación", "No sé"]
+          : ["I have a code", "Only the light", "After a repair", "Not sure"],
+      });
+    }
+  }
+
+  if (system === "network_can") {
+    if (!used(["battery voltage", "voltage", "charging"])) {
+      return block({
+        isEs,
+        summary: isEs
+          ? "Muchas fallas CAN empiezan con voltaje bajo o mala tierra."
+          : "Many CAN faults start with low voltage or a bad ground.",
+        question: isEs
+          ? "¿El voltaje de batería y carga fue probado primero?"
+          : "Was battery voltage and charging output checked first?",
+        options: isEs
+          ? ["Voltaje bajo", "Carga normal", "No probado", "Problema intermitente"]
+          : ["Voltage is low", "Charging is normal", "Not checked", "Intermittent issue"],
+      });
+    }
+  }
+
+  if (system === "transmission") {
+    if (!used(["hot", "cold", "temperature", "atf"])) {
+      return block({
+        isEs,
+        summary: isEs
+          ? "La transmisión necesita separar falla fría, caliente o por presión."
+          : "Transmission symptoms need to separate cold behavior, hot behavior, and pressure control.",
+        question: isEs
+          ? "¿El problema aparece en frío, en caliente, o solo después de manejar?"
+          : "Does the shift problem happen cold, hot, or only after driving for a while?",
+        options: isEs
+          ? ["En frío", "En caliente", "Después de manejar", "Siempre"]
+          : ["When cold", "When hot", "After driving awhile", "All the time"],
+      });
+    }
+  }
+
+  if (system === "brakes") {
+    if (!used(["speed", "highway", "pedal", "steering"])) {
+      return block({
+        isEs,
+        summary: isEs
+          ? "La vibración de frenos cambia mucho según velocidad y dónde se siente."
+          : "Brake vibration changes meaning depending on speed and where it is felt.",
+        question: isEs
+          ? "¿La vibración aparece más al frenar en alta velocidad?"
+          : "Does the vibration happen mostly when braking at highway speed?",
+        options: isEs
+          ? ["Sí, alta velocidad", "A baja velocidad", "Siempre", "No sé"]
+          : ["Yes, highway speed", "Low speed", "Every time", "Not sure"],
+      });
+    }
+  }
+
+  if (system === "fuel") {
+    if (!used(["bank", "trim", "fuel pressure", "smoke test"])) {
+      return block({
+        isEs,
+        summary: isEs
+          ? "Fuel trim alto necesita separar aire falso, fuel delivery o sensor skew."
+          : "High fuel trim needs to separate unmetered air, fuel delivery, or sensor skew.",
+        question: isEs
+          ? "¿El fuel trim alto está en un banco o en ambos bancos?"
+          : "Is the high fuel trim on one bank only or both banks?",
+        options: isEs
+          ? ["Solo Bank 1", "Solo Bank 2", "Ambos bancos", "No sé"]
+          : ["Bank 1 only", "Bank 2 only", "Both banks", "Not sure"],
+      });
+    }
+  }
+
+  return null;
+}
+
+function buildGeneralQuestion({ isEs, text, used }) {
+  const noSmoke = hasNegation(text, ["smoke", "visible smoke"]);
+  const noFuel = hasNegation(text, ["fuel smell", "gas smell", "raw fuel"]);
+
+  const hasFuel = !noFuel && includesAny(text, ["fuel smell", "gas smell", "raw fuel", "smells like gas"]);
+  const hasSmoke = !noSmoke && includesAny(text, ["black smoke", "dark smoke", "visible smoke", "smoke"]);
+
   const hasNoStart = includesAny(text, ["won't start", "no start", "does not start", "click", "crank"]);
   const hasOverheat = includesAny(text, ["overheat", "overheating", "coolant", "steam"]);
   const hasBrake = includesAny(text, ["brake", "pedal", "brake fluid", "grinding"]);
   const hasShake = includesAny(text, ["shake", "shaking", "rough idle", "vibration", "misfire"]);
+  const hasPowerLoss = includesAny(text, ["loss of power", "loses power", "weak acceleration", "won't accelerate", "rough when accelerating"]);
+  const hasFlashingCel = includesAny(text, ["flashing check engine", "check engine light flashes", "cel flashes"]);
+
+  if ((hasPowerLoss || hasFlashingCel || hasShake) && !used(["flashing", "misfire", "under load", "uphill"])) {
+    return block({
+      isEs,
+      summary: isEs
+        ? "La pérdida de potencia con check engine flashing apunta más a misfire bajo carga."
+        : "Power loss with a flashing check engine light points more toward a misfire under load.",
+      question: isEs
+        ? "¿La falla aparece más al acelerar fuerte, subir una loma, o también en idle?"
+        : "Does it happen mostly under hard acceleration/uphill, or also at idle?",
+      options: isEs
+        ? ["Acelerando/subida", "También en idle", "Después de calentarse", "No sé"]
+        : ["Acceleration/uphill", "Also at idle", "After it warms up", "Not sure"],
+    });
+  }
 
   if (hasSmoke || hasFuel) {
     if (!used(["accelerate", "aceleras"])) {
@@ -40,89 +302,66 @@ export function buildSmartFollowUp({ lang, issue, answers }) {
           : ["Yes, under acceleration", "Also at idle", "Only at startup", "Not sure"],
       });
     }
-
-    if (!used(["rough", "misfire", "tiembla", "falla"])) {
-      return block({
-        isEs,
-        summary: isEs
-          ? "Ahora necesito separar injector, mezcla rica o misfire."
-          : "Now I need to separate injector, rich mixture, or misfire.",
-        question: isEs
-          ? "¿El motor tiembla o falla cuando aparece el humo u olor?"
-          : "Does the engine shake or misfire when the smoke or smell appears?",
-        options: isEs
-          ? ["Sí, tiembla", "Sí, falla al acelerar", "No, trabaja normal", "No sé"]
-          : ["Yes, it shakes", "Yes, misfires on acceleration", "No, runs smooth", "Not sure"],
-      });
-    }
   }
 
-  if (hasNoStart) {
-    if (!used(["crank", "gira"])) {
-      return block({
-        isEs,
-        summary: isEs
-          ? "Primero separo batería, starter o alimentación."
-          : "First I need to separate battery, starter, or power supply.",
-        question: isEs
-          ? "Cuando intentas encender, ¿el motor gira o solo hace click?"
-          : "When you try to start it, does the engine crank or only click?",
-        options: isEs
-          ? ["Gira normal", "Solo hace click", "No hace nada", "No sé"]
-          : ["Cranks normally", "Only clicks", "No sound", "Not sure"],
-      });
-    }
+  if (hasNoStart && !used(["crank", "gira"])) {
+    return block({
+      isEs,
+      summary: isEs
+        ? "Primero separo batería, starter o alimentación."
+        : "First I need to separate battery, starter, or power supply.",
+      question: isEs
+        ? "Cuando intentas encender, ¿el motor gira o solo hace click?"
+        : "When you try to start it, does the engine crank or only click?",
+      options: isEs
+        ? ["Gira normal", "Solo hace click", "No hace nada", "No sé"]
+        : ["Cranks normally", "Only clicks", "No sound", "Not sure"],
+    });
   }
 
-  if (hasOverheat) {
-    if (!used(["coolant", "refrigerante", "steam", "vapor"])) {
-      return block({
-        isEs,
-        summary: isEs
-          ? "El sobrecalentamiento necesita confirmación rápida del sistema de enfriamiento."
-          : "Overheating needs a quick cooling-system confirmation.",
-        question: isEs
-          ? "¿Has notado pérdida de coolant, vapor o temperatura subiendo rápido?"
-          : "Have you noticed coolant loss, steam, or the temperature rising fast?",
-        options: isEs
-          ? ["Pierde coolant", "Sale vapor", "Sube rápido", "No sé"]
-          : ["Coolant loss", "Steam", "Temp rises fast", "Not sure"],
-      });
-    }
+  if (hasOverheat && !used(["coolant", "refrigerante", "steam", "vapor"])) {
+    return block({
+      isEs,
+      summary: isEs
+        ? "El sobrecalentamiento necesita confirmación rápida del sistema de enfriamiento."
+        : "Overheating needs a quick cooling-system confirmation.",
+      question: isEs
+        ? "¿Has notado pérdida de coolant, vapor o temperatura subiendo rápido?"
+        : "Have you noticed coolant loss, steam, or the temperature rising fast?",
+      options: isEs
+        ? ["Pierde coolant", "Sale vapor", "Sube rápido", "No sé"]
+        : ["Coolant loss", "Steam", "Temp rises fast", "Not sure"],
+    });
   }
 
-  if (hasBrake) {
-    if (!used(["pedal"])) {
-      return block({
-        isEs,
-        summary: isEs
-          ? "Los frenos necesitan separar desgaste de una falla hidráulica."
-          : "Brake symptoms need to separate wear from a hydraulic issue.",
-        question: isEs
-          ? "¿Cómo se siente el pedal de freno?"
-          : "How does the brake pedal feel?",
-        options: isEs
-          ? ["Muy suave", "Duro", "Vibra o raspa", "No sé"]
-          : ["Very soft", "Hard", "Grinding or vibration", "Not sure"],
-      });
-    }
+  if (hasBrake && !used(["pedal"])) {
+    return block({
+      isEs,
+      summary: isEs
+        ? "Los frenos necesitan separar desgaste de una falla hidráulica."
+        : "Brake symptoms need to separate wear from a hydraulic issue.",
+      question: isEs
+        ? "¿Cómo se siente el pedal de freno?"
+        : "How does the brake pedal feel?",
+      options: isEs
+        ? ["Muy suave", "Duro", "Vibra o raspa", "No sé"]
+        : ["Very soft", "Hard", "Grinding or vibration", "Not sure"],
+    });
   }
 
-  if (hasShake) {
-    if (!used(["cold", "warm", "frío", "caliente"])) {
-      return block({
-        isEs,
-        summary: isEs
-          ? "La vibración necesita separar misfire, mezcla o soporte de motor."
-          : "The shaking needs to separate misfire, mixture, or engine mount.",
-        question: isEs
-          ? "¿Tiembla más cuando está frío o cuando ya está caliente?"
-          : "Does it shake more when cold or after it warms up?",
-        options: isEs
-          ? ["Más frío", "Más caliente", "Igual siempre", "No sé"]
-          : ["More when cold", "More when warm", "Same all the time", "Not sure"],
-      });
-    }
+  if (hasShake && !used(["cold", "warm", "frío", "caliente"])) {
+    return block({
+      isEs,
+      summary: isEs
+        ? "La vibración تحتاج separar misfire, mezcla o soporte de motor."
+        : "The shaking needs to separate misfire, mixture, or engine mount.",
+      question: isEs
+        ? "¿Tiembla más cuando está frío o cuando ya está caliente?"
+        : "Does it shake more when cold or after it warms up?",
+      options: isEs
+        ? ["Más frío", "Más caliente", "Igual siempre", "No sé"]
+        : ["More when cold", "More when warm", "Same all the time", "Not sure"],
+    });
   }
 
   return block({
@@ -167,4 +406,36 @@ When to stop driving:
 ${isEs
   ? "Deja de manejar si el auto se siente inseguro, se sobrecalienta, huele a quemado, pierde mucha potencia, o aparece una luz roja."
   : "Stop driving if the car feels unsafe, overheats, smells like burning, loses strong power, or shows a red warning light."}`;
+}
+
+function buildText(issue, answers) {
+  return [
+    String(issue || ""),
+    ...(Array.isArray(answers)
+      ? answers.map((a) => `${a?.question || ""} ${a?.answer || ""}`)
+      : []),
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+
+function buildAskedText(answers) {
+  return Array.isArray(answers)
+    ? answers.map((a) => String(a?.question || "").toLowerCase()).join(" ")
+    : "";
+}
+
+function hasNegation(text, terms) {
+  const clean = String(text || "").toLowerCase();
+
+  return terms.some((term) => {
+    return (
+      clean.includes(`no ${term}`) ||
+      clean.includes(`no visible ${term}`) ||
+      clean.includes(`without ${term}`) ||
+      clean.includes(`not seeing ${term}`) ||
+      clean.includes(`doesn't have ${term}`) ||
+      clean.includes(`does not have ${term}`)
+    );
+  });
 }
