@@ -22,8 +22,6 @@ export function detectDominantSignals(issue, answers) {
     .join(" ")
     .toLowerCase();
 
-  const signals = [];
-
   const rules = [
     { label: "black smoke / rich running", words: ["black smoke", "dark smoke", "rich", "running rich"] },
     { label: "fuel smell / raw fuel", words: ["fuel smell", "gas smell", "raw fuel", "smells like gas", "gasoline smell", "strong fuel"] },
@@ -41,6 +39,8 @@ export function detectDominantSignals(issue, answers) {
     { label: "check engine light", words: ["check engine", "engine light", "cel", "service engine"] },
   ];
 
+  const signals = [];
+
   for (const rule of rules) {
     if (rule.words.some((word) => combined.includes(word))) {
       signals.push(rule.label);
@@ -51,87 +51,6 @@ export function detectDominantSignals(issue, answers) {
 }
 
 export function detectComplexity(issue, dominantSignals, answers) {
-  const text = String(issue || "").toLowerCase();
-  const answerText = Array.isArray(answers)
-    ? answers.map((a) => `${a?.question || ""} ${a?.answer || ""}`).join(" ").toLowerCase()
-    : "";
-
-  const allText = `${text} ${answerText}`;
-  const signalCount = Array.isArray(dominantSignals) ? dominantSignals.length : 0;
-
-  const highRiskWords = [
-    "smoke", "burning", "overheat", "overheating", "brake", "oil pressure",
-    "airbag", "srs", "stall", "dies while driving", "red warning",
-    "fuel smell", "gas smell", "raw fuel", "no brakes", "steering locked",
-    "flashing check engine",
-  ];
-
-  const complexWords = [
-    "ac", "a/c", "air conditioning", "compressor", "cuts out", "intermittent",
-    "module", "airbag", "srs", "water", "leak", "roof", "sunroof",
-    "electrical", "misfire", "transmission", "overheating", "stall", "dies",
-    "shakes", "vibration", "turbo", "boost", "black smoke", "whistle",
-    "semi", "truck",
-  ];
-
-  const simpleWords = [
-    "maintenance", "oil change", "tire pressure", "wiper", "washer fluid",
-    "light bulb", "gas cap",
-  ];
-
-  const isHighRiskWord = highRiskWords.some((w) => allText.includes(w));
-  const isComplexWord = complexWords.some((w) => allText.includes(w));
-  const isSimpleWord = simpleWords.some((w) => allText.includes(w));
-
-  if (isSimpleWord && !isHighRiskWord && signalCount === 0) {
-    return {
-      level: "simple low-risk symptom",
-      minimumQuestions: 3,
-      reason: "simple issue, but DriveShift still asks a few useful questions",
-    };
-  }
-
-  if (signalCount >= 4) {
-    return {
-      level: "very high complexity multi-signal case",
-      minimumQuestions: 6,
-      reason: "multiple dominant symptoms need deeper narrowing",
-    };
-  }
-
-  if (signalCount === 3) {
-    return {
-      level: "high complexity multi-signal case",
-      minimumQuestions: 5,
-      reason: "several strong symptom signals are present",
-    };
-  }
-
-  if (isHighRiskWord || signalCount === 2) {
-    return {
-      level: "high complexity or safety-sensitive",
-      minimumQuestions: 5,
-      reason: "safety-sensitive symptoms require controlled questioning",
-    };
-  }
-
-  if (isComplexWord || signalCount === 1) {
-    return {
-      level: "complex symptom",
-      minimumQuestions: 4,
-      reason: "the issue needs targeted mechanic questions",
-    };
-  }
-
-  return {
-    level: "standard symptom",
-    minimumQuestions: 3,
-    reason: "standard issue with three useful narrowing questions",
-  };
-}
-
-export function detectDiagnosticReadiness(issue, answers, dominantSignals, complexity) {
-  const answerCount = countUserAnswers(answers);
   const text = [
     String(issue || ""),
     ...(Array.isArray(answers)
@@ -141,64 +60,114 @@ export function detectDiagnosticReadiness(issue, answers, dominantSignals, compl
     .join(" ")
     .toLowerCase();
 
-  const hasFuel = includesAny(text, ["fuel smell", "gas smell", "raw fuel", "strong fuel", "smells like gas"]);
-  const hasSmoke = includesAny(text, ["black smoke", "dark smoke", "smoke"]);
-  const hasRoughIdle = includesAny(text, ["rough idle", "shakes at idle", "shaking", "idle"]);
-  const hasMisfire = includesAny(text, ["misfire", "flashing", "check engine"]);
-  const hasWeakPower = includesAny(text, ["weak", "loss of power", "no power", "won't accelerate"]);
-  const hasOverheat = includesAny(text, ["overheat", "overheating", "steam", "coolant"]);
-  const hasNoStart = includesAny(text, ["no start", "won't start", "click", "crank"]);
-  const hasBrake = includesAny(text, ["brake", "pedal", "grinding brakes", "brake fluid"]);
+  const signalCount = Array.isArray(dominantSignals) ? dominantSignals.length : 0;
 
-  let minimumQuestions = complexity.minimumQuestions;
-  let readyForAnalysis = false;
-  let reason = complexity.reason;
+  const highRiskWords = [
+    "smoke",
+    "burning",
+    "overheat",
+    "overheating",
+    "brake",
+    "oil pressure",
+    "airbag",
+    "srs",
+    "stall",
+    "dies while driving",
+    "red warning",
+    "fuel smell",
+    "gas smell",
+    "raw fuel",
+    "no brakes",
+    "flashing check engine",
+  ];
 
-  if (hasFuel && hasRoughIdle) {
-    minimumQuestions = Math.max(minimumQuestions, 4);
-    reason = "fuel smell plus rough idle needs fuel and ignition separation";
+  const simpleWords = [
+    "maintenance",
+    "oil change",
+    "tire pressure",
+    "wiper",
+    "washer fluid",
+    "light bulb",
+    "gas cap",
+  ];
+
+  const isHighRisk = highRiskWords.some((w) => text.includes(w));
+  const isSimple = simpleWords.some((w) => text.includes(w));
+
+  if (isSimple && !isHighRisk && signalCount === 0) {
+    return {
+      level: "simple low-risk symptom",
+      minimumQuestions: 1,
+      reason: "simple issue needs only one confirmation question",
+    };
   }
 
-  if ((hasSmoke && hasFuel) || (hasSmoke && hasWeakPower)) {
-    minimumQuestions = Math.max(minimumQuestions, 5);
-    reason = "smoke plus fuel or power loss is a high-priority pattern";
+  if (isHighRisk || signalCount >= 2) {
+    return {
+      level: "safety-sensitive or multi-signal case",
+      minimumQuestions: 3,
+      reason: "strong symptoms need up to three focused diagnostic questions",
+    };
   }
 
-  if (hasOverheat) {
-    minimumQuestions = Math.max(minimumQuestions, 5);
-    reason = "overheating needs safety and cooling-system context";
+  return {
+    level: "standard symptom",
+    minimumQuestions: 2,
+    reason: "standard issue needs two useful narrowing questions",
+  };
+}
+
+export function detectDiagnosticReadiness(issue, answers, dominantSignals, complexity) {
+  const answerCount = countUserAnswers(answers);
+
+  const text = [
+    String(issue || ""),
+    ...(Array.isArray(answers)
+      ? answers.map((a) => `${a?.question || ""} ${a?.answer || ""}`)
+      : []),
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  let minimumQuestions = complexity?.minimumQuestions || 2;
+  let reason = complexity?.reason || "standard diagnostic flow";
+
+  const hasObviousPattern =
+    includesAny(text, ["black smoke"]) &&
+    includesAny(text, ["fuel smell", "gas smell", "raw fuel", "smells like gas"]);
+
+  const hasDangerPattern = includesAny(text, [
+    "red oil light",
+    "oil pressure",
+    "overheating",
+    "steam",
+    "brake fluid leak",
+    "no brakes",
+    "burning smell",
+    "electrical burning",
+  ]);
+
+  if (hasObviousPattern) {
+    minimumQuestions = 2;
+    reason = "black smoke plus fuel smell creates a strong dominant fuel pattern";
   }
 
-  if (hasNoStart) {
-    minimumQuestions = Math.max(minimumQuestions, 4);
-    reason = "no-start cases need crank/click/power/fuel separation";
+  if (hasDangerPattern) {
+    minimumQuestions = 2;
+    reason = "safety-sensitive symptom should move to analysis quickly";
   }
 
-  if (hasBrake) {
-    minimumQuestions = Math.max(minimumQuestions, 5);
-    reason = "brake symptoms require safety-controlled questioning";
-  }
-
-  if (hasMisfire && hasRoughIdle) {
-    minimumQuestions = Math.max(minimumQuestions, 4);
-    reason = "rough idle plus misfire/check-engine context needs targeted narrowing";
-  }
-
-  if (answerCount >= minimumQuestions) {
-    readyForAnalysis = true;
-  }
-
-  minimumQuestions = clamp(minimumQuestions, 3, 6);
+  minimumQuestions = clamp(minimumQuestions, 1, 3);
 
   return {
     minimumQuestions,
-    readyForAnalysis,
+    readyForAnalysis: answerCount >= minimumQuestions,
     reason,
   };
 }
 
 export function includesAny(text, words) {
-  return words.some((w) => String(text || "").includes(w));
+  return words.some((w) => String(text || "").toLowerCase().includes(w));
 }
 
 export function clamp(value, min, max) {
