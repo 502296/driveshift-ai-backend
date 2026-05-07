@@ -106,7 +106,7 @@ When to stop driving:
 `;
 
 const controller = new AbortController();
-const timeout = setTimeout(() => controller.abort(), 12000);
+const timeout = setTimeout(() => controller.abort(), 25000);
 
 let response;
 try {
@@ -132,7 +132,7 @@ image_url: `data:image/jpeg;base64,${image}`,
 },
 ],
 temperature: 0.03,
-max_output_tokens: 760,
+max_output_tokens: 420,
 }),
 });
 } finally {
