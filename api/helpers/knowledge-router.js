@@ -11,6 +11,7 @@ export function detectUserLevel(issue) {
     "u codes",
     "can bus",
     "fuel trims",
+    "fuel trim",
     "bank 1",
     "bank 2",
     "atf temperature",
@@ -22,48 +23,119 @@ export function detectUserLevel(issue) {
     "hydraulic lifter",
     "wrist pin",
     "oil pressure readings",
+    "injector balance",
+    "smoke test",
+    "upstream o2",
+    "downstream o2",
   ];
 
-  if (expertWords.some((w) => text.includes(w))) {
-    return "advanced_technician";
-  }
-
-  return "driver";
+  return expertWords.some((w) => text.includes(w))
+    ? "advanced_technician"
+    : "driver";
 }
 
 export function detectSystem(issue) {
   const text = String(issue || "").toLowerCase();
 
+  // Highest priority: professional fuel/combustion diagnosis
   if (
-    text.includes("can bus") ||
-    text.includes("u-code") ||
-    text.includes("u code") ||
-    text.includes("module") ||
-    text.includes("no communication") ||
-    text.includes("60 ohms") ||
-    text.includes("oscilloscope")
+    includesAny(text, [
+      "fuel trim",
+      "fuel trims",
+      "bank 1",
+      "bank 2",
+      "injector",
+      "fuel pressure",
+      "smoke test",
+      "o2 sensor",
+      "upstream o2",
+      "downstream o2",
+      "lean condition",
+      "rich condition",
+    ])
+  ) {
+    return "fuel";
+  }
+
+  // Misfire / power loss under load is engine drivability, not starting.
+  if (
+    includesAny(text, [
+      "flashing check engine",
+      "check engine light flashes",
+      "cel flashes",
+      "misfire",
+      "rough under load",
+      "engine feels rough",
+      "hesitating",
+      "loses power",
+      "loss of power",
+      "uphill",
+      "heavy throttle",
+      "under load",
+      "rough when accelerating",
+    ])
+  ) {
+    return "engine_drivability";
+  }
+
+  if (
+    includesAny(text, [
+      "can bus",
+      "u-code",
+      "u code",
+      "module",
+      "no communication",
+      "60 ohms",
+      "oscilloscope",
+      "signal clipping",
+    ])
   ) {
     return "network_can";
   }
 
-  if (text.includes("airbag") || text.includes("srs")) {
+  if (includesAny(text, ["airbag", "srs"])) {
     return "airbags_srs";
   }
 
-  if (text.includes("brake") || text.includes("pedal") || text.includes("rotor")) {
+  if (includesAny(text, ["brake", "pedal", "rotor"])) {
     return "brakes";
   }
 
-  if (text.includes("transmission") || text.includes("shift") || text.includes("atf")) {
+  if (includesAny(text, ["transmission", "shift", "atf", "flared"])) {
     return "transmission";
   }
 
-  if (text.includes("suspension") || text.includes("clunk") || text.includes("steering rack") || text.includes("eps")) {
+  if (
+    includesAny(text, [
+      "suspension",
+      "clunk",
+      "clicking in the rear",
+      "rear clicking",
+      "steering rack",
+      "eps",
+      "torque sensor",
+      "zero-point",
+    ])
+  ) {
     return "suspension";
   }
 
-  if (text.includes("fuel trim") || text.includes("injector") || text.includes("fuel pressure")) {
-    return "fuel";
+  if (
+    includesAny(text, [
+      "hydraulic lifter",
+      "wrist pin",
+      "tapping",
+      "knocking",
+      "metallic tapping",
+      "upper cylinder head",
+    ])
+  ) {
+    return "engine_noise";
+  }
+
+  // True no-start only. Do NOT classify "starts shaking" or "starts hesitating" as no-start.
+  if (isTrueNoStart(text)) {
+    return "starting";
   }
 
   return "general";
@@ -80,7 +152,9 @@ export function findKnowledgeMatches(issue) {
   }
 
   const matches = data.filter((item) => {
-    return item.symptom_patterns?.some((p) => text.includes(String(p).toLowerCase()));
+    return item.symptom_patterns?.some((p) =>
+      text.includes(String(p).toLowerCase())
+    );
   });
 
   return {
@@ -88,4 +162,26 @@ export function findKnowledgeMatches(issue) {
     userLevel: detectUserLevel(issue),
     matches,
   };
+}
+
+function includesAny(text, words) {
+  return words.some((w) => String(text || "").toLowerCase().includes(w));
+}
+
+function isTrueNoStart(text) {
+  const trueNoStartPhrases = [
+    "won't start",
+    "will not start",
+    "does not start",
+    "doesn't start",
+    "no start",
+    "hard start",
+    "cranks but won't start",
+    "cranks but does not start",
+    "no crank",
+    "starter clicks",
+    "only clicks",
+  ];
+
+  return trueNoStartPhrases.some((phrase) => text.includes(phrase));
 }
