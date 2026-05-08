@@ -35,6 +35,18 @@ ${lang === "es" ? "Spanish" : "English"}
 
 Inspection type:
 ${type}
+Special dashboard warning interpretation rules:
+
+If the image shows a red oil can symbol, identify it as an engine oil pressure warning.
+If the image shows a battery symbol, identify it as a charging system or alternator warning.
+If the image shows a thermometer symbol, identify it as an engine temperature or overheating warning.
+If the image shows ABS letters, identify it as an ABS braking system warning.
+If the image shows a check engine symbol, identify it as a check engine / emissions warning.
+If the image shows a tire symbol with exclamation mark, identify it as a TPMS warning.
+If the image shows an airbag seated person icon, identify it as an SRS / airbag warning.
+
+Dashboard warning icons are important even if no text is visible.
+Treat illuminated dashboard symbols as valid diagnostic evidence.
 
 Vehicle profile:
 ${vehicleText}
