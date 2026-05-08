@@ -21,12 +21,20 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { issue, answers, language, vehicleProfile } = req.body;
+    const {
+      issue,
+      answers,
+      language,
+      vehicleProfile,
+      flowControl,
+      localDiagnosticDraft,
+    } = req.body;
 
     const lang = language === "es" ? "es" : "en";
     const safeIssue = String(issue || "").trim();
     const answerList = Array.isArray(answers) ? answers : [];
     const profile = vehicleProfile || {};
+    const localDraft = String(localDiagnosticDraft || "").trim();
 
     if (!safeIssue) {
       return res.status(200).json({
@@ -54,11 +62,14 @@ export default async function handler(req, res) {
       complexity
     );
 
-    const hasFlowControl = answerList.some((a) =>
-      String(a?.question || "").toLowerCase().includes("driveshift flow control")
-    );
+    const forcedFinal = shouldForceFinal({
+      flowControl,
+      answerList,
+      realAnswerCount,
+      hasObdCode,
+    });
 
-    if (!hasObdCode && !hasFlowControl && realAnswerCount < REQUIRED_FOLLOW_UPS) {
+    if (!hasObdCode && !forcedFinal && realAnswerCount < REQUIRED_FOLLOW_UPS) {
       const followUp =
         realAnswerCount === 0
           ? buildSmartFollowUp({
@@ -87,19 +98,27 @@ export default async function handler(req, res) {
       hasObdCode,
       obdInsight,
       realAnswerCount,
+      flowControl,
+      localDiagnosticDraft: localDraft,
     });
 
     const aiText = await requestOpenAIReport(prompt);
 
-    const result = aiText
+    let result = aiText
       ? cleanAndFinalize(aiText, lang)
-      : buildFastAnalysis({
-          lang,
-          issue: safeIssue,
-          dominantSignals,
-          obdCode,
-          obdInsight,
-        });
+      : "";
+
+    if (!result || looksLikeFollowUp(result)) {
+      result = localDraft || buildFastAnalysis({
+        lang,
+        issue: safeIssue,
+        dominantSignals,
+        obdCode,
+        obdInsight,
+      });
+    }
+
+    result = cleanAndFinalize(result, lang);
 
     return res.status(200).json({ result });
   } catch (_) {
@@ -113,6 +132,35 @@ export default async function handler(req, res) {
       }),
     });
   }
+}
+
+function shouldForceFinal({
+  flowControl,
+  answerList,
+  realAnswerCount,
+  hasObdCode,
+}) {
+  if (hasObdCode) return true;
+
+  if (realAnswerCount >= REQUIRED_FOLLOW_UPS) return true;
+
+  const flowDecision = String(flowControl?.localDecision || "").toLowerCase();
+  if (flowDecision === "final" || flowDecision === "analysis") return true;
+
+  const hasControlAnswer = answerList.some((a) => {
+    const q = String(a?.question || "").toLowerCase();
+    const ans = String(a?.answer || "").toLowerCase();
+
+    return (
+      q.includes("driveshift diagnostic flow control") ||
+      q.includes("driveshift flow control") ||
+      ans.includes("do not ask another question") ||
+      ans.includes("final diagnosis now") ||
+      ans.includes("interview is complete")
+    );
+  });
+
+  return hasControlAnswer;
 }
 
 function buildSecondFollowUp({ lang, issue, answers }) {
@@ -289,6 +337,8 @@ function buildAnalysisPrompt({
   hasObdCode,
   obdInsight,
   realAnswerCount,
+  flowControl,
+  localDiagnosticDraft,
 }) {
   const vehicleText = buildVehicleText(vehicleProfile);
 
@@ -306,6 +356,10 @@ function buildAnalysisPrompt({
   const dominantText = dominantSignals.length
     ? dominantSignals.join(", ")
     : "None detected";
+
+  const localFlowName = String(flowControl?.localFlowName || "unknown").trim();
+  const localDecision = String(flowControl?.localDecision || "analysis").trim();
+  const localAnswerCount = String(flowControl?.answerCount ?? realAnswerCount);
 
   return `
 You are DriveShift Doctor, a calm senior automotive diagnostic mechanic.
@@ -331,6 +385,14 @@ ${dominantText}
 OBD intelligence insight:
 ${obdInsight || "None"}
 
+Local diagnostic flow:
+Flow name: ${localFlowName}
+Local decision: ${localDecision}
+Local answer count: ${localAnswerCount}
+
+Local diagnostic draft:
+${localDiagnosticDraft || "None"}
+
 Diagnostic complexity:
 ${complexity?.level || "standard"}
 
@@ -340,15 +402,18 @@ ${readiness?.reason || "ready for final report"}
 Answered questions:
 ${realAnswerCount}
 
-Rules:
+Critical rules:
 Give final diagnosis only.
-Do not ask more questions.
+Do not ask another question.
 Do not output follow_up.
 Answer options must be None.
 Do not mention AI.
+Do not use generic filler.
 Do not pretend certainty.
-Keep the strongest symptom as the main direction.
-Use the user's two answers as diagnostic evidence.
+Do not ignore the original symptom.
+Keep the strongest symptom as the main diagnostic direction.
+Use the user's answers as diagnostic evidence.
+If the local diagnostic draft is strong, improve it without changing the core direction.
 
 Output exactly this format:
 
@@ -361,10 +426,10 @@ Risk level:
 [High or Medium or Low]
 
 Likely issue:
-[short likely issue]
+[specific likely issue, not vague]
 
 Why it fits:
-[short explanation]
+[clear mechanic reasoning based on symptom timing and answers]
 
 What to inspect next:
 [practical inspection checks]
@@ -396,7 +461,7 @@ async function requestOpenAIReport(prompt) {
         model: process.env.DRIVESHIFT_MODEL || "gpt-4o-mini",
         input: prompt,
         temperature: 0.08,
-        max_output_tokens: 700,
+        max_output_tokens: 850,
       }),
     });
 
@@ -425,9 +490,27 @@ function buildFastAnalysis({ lang, issue, dominantSignals, obdCode, obdInsight }
 
   const hasObd = Boolean(obdCode);
   const hasFuelTrim = includesAny(text, ["fuel trim", "bank 1", "bank 2", "lean"]);
-  const hasMisfire = includesAny(text, ["misfire", "flashing check engine", "rough under load", "hesitating", "loses power"]);
-  const hasBrake = includesAny(text, ["brake", "braking", "rotor", "pedal", "steering wheel", "vibration"]);
-  const hasOverheat = includesAny(text, ["overheat", "coolant", "steam", "temperature"]);
+  const hasMisfire = includesAny(text, [
+    "misfire",
+    "flashing check engine",
+    "rough under load",
+    "hesitating",
+    "loses power",
+  ]);
+  const hasBrake = includesAny(text, [
+    "brake",
+    "braking",
+    "rotor",
+    "pedal",
+    "steering wheel",
+    "vibration",
+  ]);
+  const hasOverheat = includesAny(text, [
+    "overheat",
+    "coolant",
+    "steam",
+    "temperature",
+  ]);
   const hasNoStart = isTrueNoStart(text);
 
   const risk = hasOverheat || hasBrake ? "High" : "Medium";
@@ -571,9 +654,23 @@ function ensureAnswerOptionsNone(text) {
 
 function removeFollowUpLanguage(text) {
   return String(text || "")
-    .replace(/Still narrowing the issue\./gi, "Pending diagnostic confirmation.")
+    .replace(/Still narrowing the issue\./gi, "The pattern is now ready for final analysis.")
     .replace(/Need one more detail before a reliable diagnosis\./gi, "The pattern is now ready for final analysis.")
+    .replace(/I need one more detail before/gi, "The available details now point toward")
+    .replace(/Before I can diagnose/gi, "Based on the available details")
     .trim();
+}
+
+function looksLikeFollowUp(text) {
+  const clean = String(text || "").toLowerCase();
+
+  return (
+    clean.includes("diagnosis status: follow_up") ||
+    clean.includes("answer options: yes") ||
+    clean.includes("answer options:\n-") ||
+    clean.includes("what exactly happens?") ||
+    clean.includes("does the symptom") && !clean.includes("answer options:\nnone")
+  );
 }
 
 function buildVehicleText(profile) {
