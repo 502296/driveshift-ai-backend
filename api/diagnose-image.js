@@ -35,18 +35,19 @@ ${lang === "es" ? "Spanish" : "English"}
 
 Inspection type:
 ${type}
-Special dashboard warning interpretation rules:
 
+Special dashboard warning interpretation rules:
+Dashboard warning icons are valid diagnostic evidence even if no text is visible.
 If the image shows a red oil can symbol, identify it as an engine oil pressure warning.
+If the image shows a yellow tire horseshoe shape with an exclamation mark, identify it as a TPMS / low tire pressure warning.
 If the image shows a battery symbol, identify it as a charging system or alternator warning.
 If the image shows a thermometer symbol, identify it as an engine temperature or overheating warning.
 If the image shows ABS letters, identify it as an ABS braking system warning.
 If the image shows a check engine symbol, identify it as a check engine / emissions warning.
-If the image shows a tire symbol with exclamation mark, identify it as a TPMS warning.
 If the image shows an airbag seated person icon, identify it as an SRS / airbag warning.
+If the image shows a red brake circle or PARK/BRAKE symbol, identify it as a brake system or parking brake warning.
 
-Dashboard warning icons are important even if no text is visible.
-Treat illuminated dashboard symbols as valid diagnostic evidence.
+If the dashboard warning symbol is large, centered, and clearly illuminated, do not say the image needs clearer inspection. Diagnose the visible warning symbol.
 
 Vehicle profile:
 ${vehicleText}
@@ -60,6 +61,7 @@ Do not invent details.
 Do not claim certainty from image alone.
 
 If the image is blurry, dark, too close, or unclear, explain exactly what needs to be clearer.
+But if a dashboard warning icon is clear and recognizable, identify the warning category and give practical next steps.
 
 Look for:
 battery corrosion, leaking fluids, cracked hoses, damaged belts,
@@ -116,11 +118,8 @@ When to stop driving:
           "Content-Type": "application/json",
           Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
         },
-
         body: JSON.stringify({
-          model:
-              process.env.DRIVESHIFT_VISION_MODEL || "gpt-4o-mini",
-
+          model: process.env.DRIVESHIFT_VISION_MODEL || "gpt-4o-mini",
           input: [
             {
               role: "user",
@@ -129,17 +128,13 @@ When to stop driving:
                   type: "input_text",
                   text: prompt,
                 },
-
                 {
                   type: "input_image",
-                  image_url: {
-                    url: `data:image/jpeg;base64,${image}`,
-                  },
+                  image_url: `data:image/jpeg;base64,${image}`,
                 },
               ],
             },
           ],
-
           temperature: 0.03,
           max_output_tokens: 420,
         }),
@@ -155,7 +150,6 @@ When to stop driving:
     }
 
     const data = await response.json();
-
     let result = extractText(data).trim();
 
     if (!result) {
