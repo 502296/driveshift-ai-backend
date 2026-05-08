@@ -137,7 +137,9 @@ When to stop driving:
     if (!response.ok) {
       const errorText = await response.text();
       return res.status(200).json({
-        result: debugResult(`OpenAI response not OK. Status: ${response.status}. Body: ${errorText}`),
+        result: debugResult(
+          `OpenAI response not OK. Status: ${response.status}. Body: ${errorText}`
+        ),
       });
     }
 
@@ -146,11 +148,13 @@ When to stop driving:
 
     if (!result) {
       return res.status(200).json({
-        result: debugResult(`OpenAI returned JSON but no readable text. Raw: ${JSON.stringify(data).slice(0, 1200)}`),
+        result: debugResult(
+          `OpenAI returned JSON but no readable text. Raw: ${JSON.stringify(data).slice(0, 1200)}`
+        ),
       });
     }
 
-    result = normalizeImageReport(result, lang);
+    result = normalizeImageReport(result);
 
     return res.status(200).json({ result });
   } catch (e) {
@@ -194,9 +198,11 @@ function extractText(data) {
           return item.content
             .map((c) => {
               if (typeof c.text === "string") return c.text;
+
               if (c.type === "output_text" && typeof c.text === "string") {
                 return c.text;
               }
+
               return "";
             })
             .join("\n");
@@ -211,7 +217,7 @@ function extractText(data) {
   }
 }
 
-function normalizeImageReport(text, lang) {
+function normalizeImageReport(text) {
   let clean = String(text || "").trim();
 
   clean = clean
@@ -221,35 +227,23 @@ function normalizeImageReport(text, lang) {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
-  const required = [
-    "Diagnosis status:",
-    "Voice summary:",
-    "Confidence:",
-    "Risk level:",
-    "Likely issue:",
-    "Why it fits:",
-    "What to do next:",
-    "Answer options:",
-    "When to stop driving:",
-  ];
-
-  const hasAll = required.every((label) =>
-    clean.toLowerCase().includes(label.toLowerCase())
-  );
-
-  if (!hasAll) {
-    return debugResult(`Model response missing required format. Raw response: ${clean}`);
+  if (/Diagnosis status:/i.test(clean)) {
+    clean = clean.replace(
+      /Diagnosis status:\s*(follow_up|analysis|final)/i,
+      "Diagnosis status: analysis"
+    );
+  } else {
+    clean = `Diagnosis status: analysis\n\n${clean}`;
   }
 
-  clean = clean.replace(
-    /Diagnosis status:\s*(follow_up|analysis|final)/i,
-    "Diagnosis status: analysis"
-  );
-
-  clean = clean.replace(
-    /Answer options:\s*([\s\S]*?)(?=When to stop driving:)/i,
-    "Answer options:\nNone\n\n"
-  );
+  if (/Answer options:/i.test(clean)) {
+    clean = clean.replace(
+      /Answer options:\s*([\s\S]*?)(?=When to stop driving:)/i,
+      "Answer options:\nNone\n\n"
+    );
+  } else {
+    clean = `${clean}\n\nAnswer options:\nNone`;
+  }
 
   return clean.trim();
 }
