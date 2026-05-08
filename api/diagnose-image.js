@@ -190,20 +190,36 @@ function buildVehicleText(profile) {
 
 function extractText(data) {
   try {
-    if (data.output_text) {
+    if (typeof data.output_text === "string") {
       return data.output_text;
     }
 
     if (Array.isArray(data.output)) {
       return data.output
-        .flatMap((item) => item.content || [])
-        .map((content) => content.text || "")
+        .map((item) => {
+          if (!item.content) return "";
+
+          return item.content
+            .map((c) => {
+              if (c.text) return c.text;
+
+              if (
+                c.type === "output_text" &&
+                c.text
+              ) {
+                return c.text;
+              }
+
+              return "";
+            })
+            .join("\n");
+        })
         .join("\n")
         .trim();
     }
 
     return "";
-  } catch (_) {
+  } catch (e) {
     return "";
   }
 }
