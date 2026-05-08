@@ -19,7 +19,7 @@ export default async function handler(req, res) {
 
     if (!image) {
       return res.status(200).json({
-        result: fallbackImageResult(lang),
+        result: debugResult("No image received from Flutter."),
       });
     }
 
@@ -27,8 +27,6 @@ export default async function handler(req, res) {
 
     const prompt = `
 You are DriveShift Visual Mechanic, a calm senior automotive diagnostic expert.
-
-You inspect automotive images like a real mechanic, electrical technician, body shop estimator, and safety inspector.
 
 Language:
 ${lang === "es" ? "Spanish" : "English"}
@@ -55,26 +53,13 @@ ${vehicleText}
 OCR / detected text:
 ${text || "No readable text detected."}
 
-Your job:
 Analyze the uploaded image using visible evidence only.
 Do not invent details.
 Do not claim certainty from image alone.
-
-If the image is blurry, dark, too close, or unclear, explain exactly what needs to be clearer.
-But if a dashboard warning icon is clear and recognizable, identify the warning category and give practical next steps.
-
-Look for:
-battery corrosion, leaking fluids, cracked hoses, damaged belts,
-coolant residue, burnt wiring, damaged connectors, warning lights,
-tire damage, overheating signs, dashboard warnings, body damage,
-oil leaks, brake leaks, loose wiring, broken clips, and visible wear.
-
-Rules:
-Be realistic and mechanic-like.
-No markdown.
-No bullet points.
-No numbered lists.
 Do not mention AI.
+No markdown.
+No bullets.
+No numbered lists.
 
 Output exactly this format:
 
@@ -143,9 +128,16 @@ When to stop driving:
       clearTimeout(timeout);
     }
 
-    if (!response || !response.ok) {
+    if (!response) {
       return res.status(200).json({
-        result: fallbackImageResult(lang),
+        result: debugResult("No response object returned from OpenAI."),
+      });
+    }
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      return res.status(200).json({
+        result: debugResult(`OpenAI response not OK. Status: ${response.status}. Body: ${errorText}`),
       });
     }
 
@@ -153,17 +145,17 @@ When to stop driving:
     let result = extractText(data).trim();
 
     if (!result) {
-      result = fallbackImageResult(lang);
+      return res.status(200).json({
+        result: debugResult(`OpenAI returned JSON but no readable text. Raw: ${JSON.stringify(data).slice(0, 1200)}`),
+      });
     }
 
     result = normalizeImageReport(result, lang);
 
+    return res.status(200).json({ result });
+  } catch (e) {
     return res.status(200).json({
-      result,
-    });
-  } catch (_) {
-    return res.status(200).json({
-      result: fallbackImageResult("en"),
+      result: debugResult(`Backend exception: ${String(e)}`),
     });
   }
 }
@@ -201,15 +193,10 @@ function extractText(data) {
 
           return item.content
             .map((c) => {
-              if (c.text) return c.text;
-
-              if (
-                c.type === "output_text" &&
-                c.text
-              ) {
+              if (typeof c.text === "string") return c.text;
+              if (c.type === "output_text" && typeof c.text === "string") {
                 return c.text;
               }
-
               return "";
             })
             .join("\n");
@@ -219,7 +206,7 @@ function extractText(data) {
     }
 
     return "";
-  } catch (e) {
+  } catch (_) {
     return "";
   }
 }
@@ -251,7 +238,7 @@ function normalizeImageReport(text, lang) {
   );
 
   if (!hasAll) {
-    return fallbackImageResult(lang);
+    return debugResult(`Model response missing required format. Raw response: ${clean}`);
   }
 
   clean = clean.replace(
@@ -267,58 +254,30 @@ function normalizeImageReport(text, lang) {
   return clean.trim();
 }
 
-function fallbackImageResult(lang) {
-  if (lang === "es") {
-    return `Diagnosis status: analysis
-
-Voice summary:
-Necesito una imagen más clara antes de confirmar una dirección visual.
-
-Confidence:
-45
-
-Risk level:
-Medium
-
-Likely issue:
-Image needs clearer inspection.
-
-Why it fits:
-La imagen no dio suficiente información visual confiable para identificar una causa específica.
-
-What to do next:
-Toma otra foto con buena luz y enfoca mejor la pieza o advertencia.
-
-Answer options:
-None
-
-When to stop driving:
-Deja de manejar si ves humo, olor a quemado, sobrecalentamiento o una luz roja.`;
-  }
-
+function debugResult(message) {
   return `Diagnosis status: analysis
 
 Voice summary:
-I need a clearer vehicle image before confirming a visual direction.
+DriveShift debug mode found a backend issue.
 
 Confidence:
-45
+1
 
 Risk level:
-Medium
+Low
 
 Likely issue:
-Image needs clearer inspection.
+Server debug mode
 
 Why it fits:
-The image did not provide enough reliable vehicle detail.
+${message}
 
 What to do next:
-Take another photo with better lighting and clearer focus on the affected area.
+Send this debug message to the developer and check the Vercel/OpenAI request.
 
 Answer options:
 None
 
 When to stop driving:
-Stop driving if you see smoke, overheating, severe leaks, brake issues, or a red warning light.`;
+No driving safety advice from debug mode.`;
 }
