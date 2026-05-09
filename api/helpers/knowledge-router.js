@@ -1,5 +1,3 @@
-import networkCan from "../data/network_can.json" assert { type: "json" };
-
 export function detectUserLevel(issue) {
   const text = String(issue || "").toLowerCase();
 
@@ -37,7 +35,6 @@ export function detectUserLevel(issue) {
 export function detectSystem(issue) {
   const text = String(issue || "").toLowerCase();
 
-  // Highest priority: professional fuel/combustion diagnosis
   if (
     includesAny(text, [
       "fuel trim",
@@ -57,7 +54,6 @@ export function detectSystem(issue) {
     return "fuel";
   }
 
-  // Misfire / power loss under load is engine drivability, not starting.
   if (
     includesAny(text, [
       "flashing check engine",
@@ -133,7 +129,6 @@ export function detectSystem(issue) {
     return "engine_noise";
   }
 
-  // True no-start only. Do NOT classify "starts shaking" or "starts hesitating" as no-start.
   if (isTrueNoStart(text)) {
     return "starting";
   }
@@ -142,25 +137,10 @@ export function detectSystem(issue) {
 }
 
 export function findKnowledgeMatches(issue) {
-  const system = detectSystem(issue);
-  const text = String(issue || "").toLowerCase();
-
-  let data = [];
-
-  if (system === "network_can") {
-    data = networkCan;
-  }
-
-  const matches = data.filter((item) => {
-    return item.symptom_patterns?.some((p) =>
-      text.includes(String(p).toLowerCase())
-    );
-  });
-
   return {
-    system,
+    system: detectSystem(issue),
     userLevel: detectUserLevel(issue),
-    matches,
+    matches: [],
   };
 }
 
