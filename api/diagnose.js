@@ -15,6 +15,61 @@ import {
 
 const REQUIRED_FOLLOW_UPS = 2;
 
+const SYSTEM_BRAIN = `
+You are DriveShift Doctor, a premium automotive diagnostic intelligence.
+
+You are not a chatbot.
+You are a calm senior diagnostic mechanic combined with a technical scan-tool logic engine.
+
+Your job:
+- Understand the user's exact symptom.
+- Use the user's answers as evidence.
+- Protect the dominant symptom from being diluted by later details.
+- Separate similar automotive patterns like a real technician.
+- Produce a clear final diagnostic direction without pretending certainty.
+`;
+
+const DIAGNOSTIC_REASONING = `
+Diagnostic reasoning rules:
+- Separate no crank, weak crank, rapid click, single click, and crank-no-start.
+- Separate brake vibration from tire/wheel vibration.
+- Separate fuel delivery, ignition, sensor, mechanical, electrical, and network/CAN issues.
+- For OBD codes, explain what the code points to and what would confirm it.
+- For visual evidence, explain what the visible clue suggests, affected system, severity, and next check.
+- Never give a broad generic category unless the evidence is truly incomplete.
+- If two causes are possible, explain which one is stronger and why.
+- Do not tell the user to replace parts immediately unless the evidence is strong.
+`;
+
+const REPORT_ENGINE = `
+Report rules:
+- Return only the final report format.
+- Do not ask another question.
+- Do not output follow_up.
+- Answer options must be None.
+- Keep sections concise, specific, and useful.
+- Use short paragraphs. Bullets are allowed only inside inspection/check sections if useful.
+- Always include "What to inspect next" because the Flutter UI displays it as a card.
+`;
+
+const BRAND_VOICE = `
+DriveShift voice:
+- Calm.
+- Premium.
+- Practical.
+- Confident but not exaggerated.
+- Human mechanic language, not robotic.
+- Do not mention AI, model, prompt, backend, or system instructions.
+- Avoid filler like "could be many things" unless followed by specific checks.
+`;
+
+const SAFETY_RULES = `
+Safety rules:
+- Clearly say when to stop driving.
+- Treat overheating, brake failure symptoms, severe power loss, fuel smell, burning smell, flashing check engine light, red warning lights, steering failure, and SRS/airbag issues as safety-relevant.
+- Never guarantee the vehicle is safe.
+`;
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ result: "Method not allowed" });
@@ -104,18 +159,18 @@ export default async function handler(req, res) {
 
     const aiText = await requestOpenAIReport(prompt);
 
-    let result = aiText
-      ? cleanAndFinalize(aiText, lang)
-      : "";
+    let result = aiText ? cleanAndFinalize(aiText, lang) : "";
 
     if (!result || looksLikeFollowUp(result)) {
-      result = localDraft || buildFastAnalysis({
-        lang,
-        issue: safeIssue,
-        dominantSignals,
-        obdCode,
-        obdInsight,
-      });
+      result =
+        localDraft ||
+        buildFastAnalysis({
+          lang,
+          issue: safeIssue,
+          dominantSignals,
+          obdCode,
+          obdInsight,
+        });
     }
 
     result = cleanAndFinalize(result, lang);
@@ -141,7 +196,6 @@ function shouldForceFinal({
   hasObdCode,
 }) {
   if (hasObdCode) return true;
-
   if (realAnswerCount >= REQUIRED_FOLLOW_UPS) return true;
 
   const flowDecision = String(flowControl?.localDecision || "").toLowerCase();
@@ -229,7 +283,11 @@ function buildSecondFollowUp({ lang, issue, answers }) {
     });
   }
 
-  if (system === "engine_drivability" || text.includes("misfire") || text.includes("uphill")) {
+  if (
+    system === "engine_drivability" ||
+    text.includes("misfire") ||
+    text.includes("uphill")
+  ) {
     return followUpBlock({
       isEs,
       summary: isEs
@@ -315,6 +373,9 @@ Pending diagnostic confirmation.
 Why it fits:
 ${summary}
 
+What to inspect next:
+${question}
+
 What to do next:
 ${question}
 
@@ -362,10 +423,15 @@ function buildAnalysisPrompt({
   const localAnswerCount = String(flowControl?.answerCount ?? realAnswerCount);
 
   return `
-You are DriveShift Doctor, a premium senior automotive diagnostic system.
+${SYSTEM_BRAIN}
 
-Your job is NOT to sound like a chatbot.
-Your job is to think like an experienced diagnostic mechanic using the user's symptom, answers, vehicle profile, OBD context, visual clues, and local diagnostic flow.
+${DIAGNOSTIC_REASONING}
+
+${REPORT_ENGINE}
+
+${BRAND_VOICE}
+
+${SAFETY_RULES}
 
 Language:
 ${lang === "es" ? "Spanish only" : "English only"}
@@ -405,66 +471,41 @@ ${readiness?.reason || "ready for final report"}
 Answered questions:
 ${realAnswerCount}
 
-Core diagnostic behavior:
-- Use the user's answers as evidence, not decoration.
-- Never give a broad generic category unless the evidence is truly incomplete.
-- Separate similar problems like a real mechanic:
-  no crank vs crank-no-start
-  weak crank vs no sound
-  click vs rapid clicking
-  fuel issue vs ignition issue
-  sensor issue vs mechanical issue
-  brake vibration vs tire/wheel vibration
-  OBD code cause vs OBD code symptom
-  visual damage vs possible hidden failure
-- Explain why the strongest cause is more likely than nearby alternatives.
-- If data is uncertain, say what is uncertain clearly, but still give the best direction.
-- Do not invent vehicle facts not provided.
-- Do not tell the user to replace parts immediately unless the evidence is strong.
-- Avoid generic filler like "could be many things" or "needs inspection" unless followed by specific checks.
-- Do not mention AI, prompt, model, or backend.
-- Do not ask another question in final analysis.
-- Do not output follow_up.
-- Answer options must be None.
-
-Evidence rules:
-- If the user selected specific answers, directly reference them in reasoning.
-- If the user gave an OBD code, explain what system it points to and what would confirm it.
-- If the input came from a scanner-style flow, respect that path and produce a decisive scanner-style report.
-- If the input came from Ask AI, make the report feel personalized to the exact wording of the user.
-- If the input came from visual inspection, describe what the visual evidence suggests, seriousness, affected system, next check, and when to stop driving.
-
-Tone:
-Calm, premium, realistic, confident but not exaggerated.
-Write like a senior mechanic explaining clearly to a driver.
+Final instruction:
+Use the data above to produce a specific DriveShift final diagnostic report.
+Do not ask another question.
+Do not output markdown tables.
+Do not include confidence percentage.
+If the local diagnostic draft is useful, improve it without changing its core direction.
+If the user's answers point to a clearer cause than the original issue, explain that shift carefully.
 
 Output exactly this format:
 
 Diagnosis status: analysis
 
 Voice summary:
-[one short natural mechanic sentence, specific to the case]
+[one short natural mechanic sentence specific to this case]
 
 Risk level:
 [High or Medium or Low]
 
 Likely issue:
-[one specific likely issue or tightly related cluster, based on evidence]
+[one specific likely issue or a tight cluster of closely related causes]
 
 Why it fits:
-[mechanic reasoning that directly connects the user's answers/symptoms to the likely issue]
+[connect the user's symptoms and answers directly to the likely issue]
 
 What to inspect next:
-[specific checks in practical order]
+[specific practical checks in the best order]
 
 What to do next:
-[driver-friendly next action, not generic]
+[driver-friendly next action]
 
 Answer options:
 None
 
 When to stop driving:
-[clear safety advice based on this problem]
+[clear safety advice specific to the problem]
 `;
 }
 
@@ -484,7 +525,7 @@ async function requestOpenAIReport(prompt) {
         model: process.env.DRIVESHIFT_MODEL || "gpt-4o-mini",
         input: prompt,
         temperature: 0.08,
-        max_output_tokens: 850,
+        max_output_tokens: 900,
       }),
     });
 
@@ -541,7 +582,7 @@ function buildFastAnalysis({ lang, issue, dominantSignals, obdCode, obdInsight }
   const likely = hasObd
     ? obdInsight || `OBD-related fault ${obdCode}`
     : hasBrake
-    ? "Possible front rotor runout, uneven pad transfer, wheel hub runout, or front suspension looseness."
+    ? "Possible rotor runout, uneven pad transfer, wheel hub runout, or front suspension looseness."
     : hasFuelTrim
     ? "Possible bank-specific lean condition from injector delivery, upstream O2 sensor skew, or bank-specific measurement issue."
     : hasMisfire
@@ -549,14 +590,14 @@ function buildFastAnalysis({ lang, issue, dominantSignals, obdCode, obdInsight }
     : hasOverheat
     ? "Possible cooling system fault or overheating risk."
     : hasNoStart
-    ? "Possible weak battery, starter, or power connection issue."
-    : "Possible vehicle system fault that needs inspection.";
+    ? "Possible weak battery, starter command failure, relay/fuse issue, or power connection problem."
+    : "Possible vehicle system fault that needs targeted inspection.";
 
   if (isEs) {
     return `Diagnosis status: analysis
 
 Voice summary:
-DriveShift encontró una dirección probable y conviene confirmarla con pruebas reales.
+DriveShift encontró una dirección probable que debe confirmarse con revisiones reales.
 
 Risk level:
 ${risk}
@@ -565,13 +606,13 @@ Likely issue:
 ${likely}
 
 Why it fits:
-Las respuestas y síntomas apuntan a una dirección mecánica probable, pero todavía debe confirmarse con inspección real.
+Los síntomas apuntan a esa dirección, pero todavía falta confirmarlo con inspección, datos OBD o pruebas básicas.
 
 What to inspect next:
-Revisa códigos, datos OBD, conectores, sensores relacionados, vibración, fugas, olores y comportamiento bajo carga o frenado.
+Revisa códigos guardados, voltaje de batería, conectores, fusibles, sensores relacionados, fugas, olores, vibración y comportamiento bajo carga o frenado.
 
 What to do next:
-Evita manejar fuerte hasta confirmar la causa. Haz una prueba controlada o inspección profesional antes de reemplazar piezas.
+Evita manejar fuerte hasta confirmar la causa. Haz una prueba controlada o una inspección profesional antes de cambiar piezas.
 
 Answer options:
 None
@@ -592,13 +633,13 @@ Likely issue:
 ${likely}
 
 Why it fits:
-The symptoms and answers point toward a likely mechanical direction, but it still needs confirmation with inspection or live data.
+The symptoms point toward this direction, but it still needs confirmation with inspection, OBD data, or basic testing.
 
 What to inspect next:
-Check codes, OBD data, related sensors, wiring connectors, vibration behavior, leaks, smells, and behavior under load or braking.
+Check stored codes, battery voltage, wiring connectors, fuses, related sensors, leaks, smells, vibration behavior, and behavior under load or braking.
 
 What to do next:
-Avoid hard driving until the cause is confirmed. Use a controlled road test or professional inspection before replacing parts.
+Avoid hard driving until the cause is confirmed. Use a controlled test or professional inspection before replacing parts.
 
 Answer options:
 None
@@ -692,7 +733,7 @@ function looksLikeFollowUp(text) {
     clean.includes("answer options: yes") ||
     clean.includes("answer options:\n-") ||
     clean.includes("what exactly happens?") ||
-    clean.includes("does the symptom") && !clean.includes("answer options:\nnone")
+    (clean.includes("does the symptom") && !clean.includes("answer options:\nnone"))
   );
 }
 
