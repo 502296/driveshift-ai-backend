@@ -5,7 +5,6 @@ import {
   detectDiagnosticReadiness,
 } from "./helpers/diagnostic-core.js";
 
-import { buildSmartFollowUp } from "./helpers/question-brain.js";
 import { detectSystem } from "./helpers/knowledge-router.js";
 
 import {
@@ -17,9 +16,7 @@ const REQUIRED_FOLLOW_UPS = 2;
 
 const SYSTEM_BRAIN = `
 You are DriveShift Doctor, a premium automotive diagnostic intelligence.
-
-You are not a chatbot.
-You are a calm senior diagnostic mechanic combined with a technical scan-tool logic engine.
+You are not a chatbot. You are a calm senior diagnostic mechanic combined with a technical scan-tool logic engine.
 
 Your job:
 - Understand the user's exact symptom.
@@ -35,7 +32,6 @@ Diagnostic reasoning rules:
 - Separate brake vibration from tire/wheel vibration.
 - Separate fuel delivery, ignition, sensor, mechanical, electrical, and network/CAN issues.
 - For OBD codes, explain what the code points to and what would confirm it.
-- For visual evidence, explain what the visible clue suggests, affected system, severity, and next check.
 - Never give a broad generic category unless the evidence is truly incomplete.
 - If two causes are possible, explain which one is stronger and why.
 - Do not tell the user to replace parts immediately unless the evidence is strong.
@@ -48,8 +44,7 @@ Report rules:
 - Do not output follow_up.
 - Answer options must be None.
 - Keep sections concise, specific, and useful.
-- Use short paragraphs. Bullets are allowed only inside inspection/check sections if useful.
-- Always include "What to inspect next" because the Flutter UI displays it as a card.
+- Always include "What to inspect next".
 `;
 
 const BRAND_VOICE = `
@@ -60,7 +55,6 @@ DriveShift voice:
 - Confident but not exaggerated.
 - Human mechanic language, not robotic.
 - Do not mention AI, model, prompt, backend, or system instructions.
-- Avoid filler like "could be many things" unless followed by specific checks.
 `;
 
 const SAFETY_RULES = `
@@ -189,6 +183,138 @@ export default async function handler(req, res) {
   }
 }
 
+function buildSmartFollowUp({ lang, issue, answers }) {
+  const isEs = lang === "es";
+  const text = [
+    String(issue || ""),
+    ...(Array.isArray(answers)
+      ? answers.map((a) => `${a?.question || ""} ${a?.answer || ""}`)
+      : []),
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  const asked = Array.isArray(answers)
+    ? answers.map((a) => String(a?.question || "").toLowerCase()).join(" ")
+    : "";
+
+  const used = (keys) => keys.some((k) => asked.includes(k));
+
+  const hasHighway = includesAny(text, [
+    "highway",
+    "freeway",
+    "interstate",
+    "high speed",
+    "65 mph",
+    "70 mph",
+    "speed",
+  ]);
+
+  const hasVibration = includesAny(text, [
+    "vibration",
+    "vibrate",
+    "shakes",
+    "shake",
+    "shaking",
+    "wobble",
+  ]);
+
+  const hasPowerLoss = includesAny(text, [
+    "loses power",
+    "loss of power",
+    "weak acceleration",
+    "hesitating",
+    "hesitates",
+    "rough under load",
+  ]);
+
+  const hasFlashingCel = includesAny(text, [
+    "flashing check engine",
+    "check engine light flashes",
+    "cel flashes",
+    "flashes briefly",
+  ]);
+
+  const hasFuelSmell = includesAny(text, [
+    "fuel smell",
+    "gas smell",
+    "smells like fuel",
+    "smells like gas",
+  ]);
+
+  const hasNoStart = isTrueNoStart(text);
+
+  if (hasVibration && hasHighway && !used(["steering", "seat", "floor", "pedal"])) {
+    return followUpBlock({
+      isEs,
+      summary: isEs
+        ? "La vibración a velocidad alta cambia según dónde se siente."
+        : "High-speed vibration changes diagnosis depending on where it is felt.",
+      question: isEs
+        ? "¿Dónde sientes más la vibración: volante, asiento/piso o pedal de freno?"
+        : "Where do you feel the vibration most: steering wheel, seat/floor, or brake pedal?",
+      options: isEs
+        ? ["Volante", "Asiento/piso", "Pedal de freno", "Todo el carro"]
+        : ["Steering wheel", "Seat/floor", "Brake pedal", "Whole car"],
+      stop: isEs
+        ? "Deja de manejar si la vibración se vuelve fuerte, el volante se siente inestable, o aparece una luz roja."
+        : "Stop driving if the vibration becomes severe, the steering feels unstable, or a red warning light appears.",
+    });
+  }
+
+  if ((hasPowerLoss || hasFlashingCel || hasFuelSmell) && !used(["misfire", "fuel trim", "scanner", "code"])) {
+    return followUpBlock({
+      isEs,
+      summary: isEs
+        ? "La pérdida de potencia con luz check engine puede apuntar a misfire, fuel delivery o mezcla bajo carga."
+        : "Power loss with a flashing check engine light can point to misfire, fuel delivery, or mixture problems under load.",
+      question: isEs
+        ? "¿Tienes código misfire, fuel trims altos o datos del scanner durante la falla?"
+        : "Do you have a misfire code, high fuel trims, or scan data captured during the fault?",
+      options: isEs
+        ? ["Código misfire", "Fuel trims altos", "Sin datos", "No sé"]
+        : ["Misfire code", "High fuel trims", "No scan data", "Not sure"],
+      stop: isEs
+        ? "Deja de manejar si la luz check engine parpadea, pierde mucha potencia, huele fuerte a combustible o vibra fuerte."
+        : "Stop driving if the check engine light flashes, power drops hard, fuel smell is strong, or the car shakes badly.",
+    });
+  }
+
+  if (hasNoStart && !used(["crank", "click", "sound"])) {
+    return followUpBlock({
+      isEs,
+      summary: isEs
+        ? "Primero necesito separar batería, starter o alimentación."
+        : "First I need to separate battery, starter, or power supply.",
+      question: isEs
+        ? "Cuando intentas encender, ¿el motor gira, hace click, o no hace nada?"
+        : "When you try to start it, does the engine crank, click, or do nothing?",
+      options: isEs
+        ? ["Gira normal", "Solo click", "No hace nada", "No sé"]
+        : ["Cranks normally", "Only clicks", "No sound at all", "Not sure"],
+      stop: isEs
+        ? "No sigas intentando encender si huele a quemado, sale humo o los cables se calientan."
+        : "Do not keep trying to start it if you smell burning, see smoke, or cables get hot.",
+    });
+  }
+
+  return followUpBlock({
+    isEs,
+    summary: isEs
+      ? "Necesito una condición específica para separar el sistema afectado."
+      : "I need one specific condition to separate the affected system.",
+    question: isEs
+      ? "¿Cuándo aparece más el problema: acelerando, frenando, en idle o a velocidad constante?"
+      : "When does the problem happen most: accelerating, braking, at idle, or steady speed?",
+    options: isEs
+      ? ["Acelerando", "Frenando", "En idle", "Velocidad constante"]
+      : ["Accelerating", "Braking", "At idle", "Steady speed"],
+    stop: isEs
+      ? "Deja de manejar si el vehículo se siente inseguro, pierde potencia fuerte, se sobrecalienta o aparece una luz roja."
+      : "Stop driving if the vehicle feels unsafe, loses strong power, overheats, or shows a red warning light.",
+  });
+}
+
 function shouldForceFinal({
   flowControl,
   answerList,
@@ -229,6 +355,29 @@ function buildSecondFollowUp({ lang, issue, answers }) {
     .join(" ")
     .toLowerCase();
 
+  if (
+    system === "engine_drivability" ||
+    text.includes("misfire") ||
+    text.includes("uphill") ||
+    text.includes("flashing")
+  ) {
+    return followUpBlock({
+      isEs,
+      summary: isEs
+        ? "Ahora necesito separar ignition breakdown de fuel delivery bajo carga."
+        : "Now I need to separate ignition breakdown from fuel delivery under load.",
+      question: isEs
+        ? "¿La falla aparece más bajo carga fuerte, en idle, o después de calentarse?"
+        : "Does it happen more under heavy load, at idle, or after warming up?",
+      options: isEs
+        ? ["Carga fuerte", "En idle", "Después de calentarse", "No sé"]
+        : ["Heavy load", "At idle", "After warming up", "Not sure"],
+      stop: isEs
+        ? "Deja de manejar si la luz check engine sigue parpadeando o el auto pierde mucha potencia."
+        : "Stop driving if the check engine light keeps flashing or the vehicle loses strong power.",
+    });
+  }
+
   if (system === "brakes") {
     return followUpBlock({
       isEs,
@@ -242,118 +391,24 @@ function buildSecondFollowUp({ lang, issue, answers }) {
         ? ["Peor caliente", "Igual siempre", "Solo en highway", "No sé"]
         : ["Worse when hot", "Same every time", "Only at highway speed", "Not sure"],
       stop: isEs
-        ? "Deja de manejar si el pedal se pone suave, escuchas grinding, el auto se jala fuerte, o aumenta la distancia de frenado."
-        : "Stop driving if the pedal gets soft, you hear grinding, the car pulls hard, or braking distance increases.",
-    });
-  }
-
-  if (system === "transmission") {
-    return followUpBlock({
-      isEs,
-      summary: isEs
-        ? "Ahora necesito separar pérdida de presión hidráulica de slip interno."
-        : "Now I need to separate hydraulic pressure loss from internal clutch slip.",
-      question: isEs
-        ? "Cuando ocurre el flare, ¿suben las RPM sin aumento claro de velocidad?"
-        : "When the flare happens, do RPM rise without a clear increase in vehicle speed?",
-      options: isEs
-        ? ["Sí, suben RPM", "No, solo cambio lento", "Solo caliente", "No sé"]
-        : ["Yes, RPM rises", "No, just delayed shift", "Only when hot", "Not sure"],
-      stop: isEs
-        ? "Evita manejar fuerte si el cambio patina, huele a quemado, o la transmisión entra en limp mode."
-        : "Avoid hard driving if the shift slips, smells burnt, or the transmission enters limp mode.",
-    });
-  }
-
-  if (system === "fuel" || text.includes("fuel trim") || text.includes("bank 1")) {
-    return followUpBlock({
-      isEs,
-      summary: isEs
-        ? "Ahora necesito separar injector restringido de O2 skew o exhaust leak."
-        : "Now I need to separate a restricted injector from O2 skew or an exhaust leak.",
-      question: isEs
-        ? "¿El O2 upstream o injector balance del banco afectado se ve diferente al otro banco?"
-        : "Does the upstream O2 signal or injector balance on the affected bank differ from the other bank?",
-      options: isEs
-        ? ["O2 diferente", "Injector diferente", "Ambos normales", "No probado"]
-        : ["O2 differs", "Injector differs", "Both normal", "Not tested"],
-      stop: isEs
-        ? "Evita manejar fuerte si hay misfire fuerte, flashing check engine, olor a combustible, o pérdida severa de potencia."
-        : "Avoid hard driving if there is strong misfire, flashing check engine, fuel smell, or severe power loss.",
-    });
-  }
-
-  if (
-    system === "engine_drivability" ||
-    text.includes("misfire") ||
-    text.includes("uphill")
-  ) {
-    return followUpBlock({
-      isEs,
-      summary: isEs
-        ? "Ahora necesito separar ignition breakdown de fuel delivery bajo carga."
-        : "Now I need to separate ignition breakdown from fuel delivery under load.",
-      question: isEs
-        ? "¿Tienes código misfire, fuel trims altos, o datos del scanner durante la falla?"
-        : "Do you have a misfire code, high fuel trims, or scan data captured during the fault?",
-      options: isEs
-        ? ["Código misfire", "Fuel trims altos", "Sin datos", "No sé"]
-        : ["Misfire code", "High fuel trims", "No scan data", "Not sure"],
-      stop: isEs
-        ? "Deja de manejar si la luz check engine sigue flashing, pierde mucha potencia, vibra fuerte, o huele a quemado."
-        : "Stop driving if the check engine light keeps flashing, power drops hard, it shakes badly, or smells like burning.",
-    });
-  }
-
-  if (system === "network_can") {
-    return followUpBlock({
-      isEs,
-      summary: isEs
-        ? "Ahora necesito separar módulo corrupto de power, ground o terminación."
-        : "Now I need to separate a corrupt module from power, ground, or termination.",
-      question: isEs
-        ? "¿La señal CAN mejora al aislar módulos uno por uno?"
-        : "Does the CAN waveform improve when modules are isolated one by one?",
-      options: isEs
-        ? ["Mejora con un módulo", "Sigue igual", "Solo falla caliente", "No probado"]
-        : ["Improves with one module", "Stays the same", "Only fails warm", "Not tested"],
-      stop: isEs
-        ? "No dependas del vehículo si múltiples sistemas de seguridad aparecen intermitentes."
-        : "Do not rely on the vehicle if multiple safety systems behave intermittently.",
-    });
-  }
-
-  if (system === "airbags_srs") {
-    return followUpBlock({
-      isEs,
-      summary: isEs
-        ? "Ahora necesito saber si la falla SRS apareció después de reparación o movimiento de asiento."
-        : "Now I need to know if the SRS fault appeared after repair work or seat movement.",
-      question: isEs
-        ? "¿La luz apareció después de mover asiento, cambiar batería, o reparar steering wheel?"
-        : "Did the light appear after moving a seat, replacing the battery, or steering wheel work?",
-      options: isEs
-        ? ["Mover asiento", "Batería", "Steering wheel", "No sé"]
-        : ["Seat movement", "Battery work", "Steering wheel work", "Not sure"],
-      stop: isEs
-        ? "Con luz SRS encendida, el sistema airbag puede no funcionar como debe en un accidente."
-        : "With the SRS light on, the airbag system may not work correctly in a crash.",
+        ? "Deja de manejar si el pedal se pone suave, escuchas grinding o aumenta la distancia de frenado."
+        : "Stop driving if the pedal gets soft, you hear grinding, or braking distance increases.",
     });
   }
 
   return followUpBlock({
     isEs,
     summary: isEs
-      ? "Ahora necesito un segundo dato más específico antes del reporte."
+      ? "Ahora necesito un segundo dato específico antes del reporte."
       : "Now I need one more specific detail before the final report.",
     question: isEs
-      ? "¿El síntoma aparece bajo carga, al frenar, en idle, o después de calentarse?"
+      ? "¿El síntoma aparece bajo carga, al frenar, en idle o después de calentarse?"
       : "Does the symptom happen under load, while braking, at idle, or after warming up?",
     options: isEs
       ? ["Bajo carga", "Al frenar", "En idle", "Caliente"]
       : ["Under load", "While braking", "At idle", "After warming up"],
     stop: isEs
-      ? "Deja de manejar si el vehículo se siente inseguro, pierde potencia fuerte, se sobrecalienta, o aparece luz roja."
+      ? "Deja de manejar si el vehículo se siente inseguro, pierde potencia fuerte, se sobrecalienta o aparece luz roja."
       : "Stop driving if the vehicle feels unsafe, loses strong power, overheats, or shows a red warning light.",
   });
 }
@@ -418,10 +473,6 @@ function buildAnalysisPrompt({
     ? dominantSignals.join(", ")
     : "None detected";
 
-  const localFlowName = String(flowControl?.localFlowName || "unknown").trim();
-  const localDecision = String(flowControl?.localDecision || "analysis").trim();
-  const localAnswerCount = String(flowControl?.answerCount ?? realAnswerCount);
-
   return `
 ${SYSTEM_BRAIN}
 
@@ -454,14 +505,6 @@ ${dominantText}
 OBD intelligence insight:
 ${obdInsight || "None"}
 
-Local diagnostic flow:
-Flow name: ${localFlowName}
-Local decision: ${localDecision}
-Local answer count: ${localAnswerCount}
-
-Local diagnostic draft:
-${localDiagnosticDraft || "None"}
-
 Diagnostic complexity:
 ${complexity?.level || "standard"}
 
@@ -476,8 +519,6 @@ Use the data above to produce a specific DriveShift final diagnostic report.
 Do not ask another question.
 Do not output markdown tables.
 Do not include confidence percentage.
-If the local diagnostic draft is useful, improve it without changing its core direction.
-If the user's answers point to a clearer cause than the original issue, explain that shift carefully.
 
 Output exactly this format:
 
@@ -553,7 +594,6 @@ function buildFastAnalysis({ lang, issue, dominantSignals, obdCode, obdInsight }
     .toLowerCase();
 
   const hasObd = Boolean(obdCode);
-  const hasFuelTrim = includesAny(text, ["fuel trim", "bank 1", "bank 2", "lean"]);
   const hasMisfire = includesAny(text, [
     "misfire",
     "flashing check engine",
@@ -582,9 +622,7 @@ function buildFastAnalysis({ lang, issue, dominantSignals, obdCode, obdInsight }
   const likely = hasObd
     ? obdInsight || `OBD-related fault ${obdCode}`
     : hasBrake
-    ? "Possible rotor runout, uneven pad transfer, wheel hub runout, or front suspension looseness."
-    : hasFuelTrim
-    ? "Possible bank-specific lean condition from injector delivery, upstream O2 sensor skew, or bank-specific measurement issue."
+    ? "Possible rotor runout, tire/wheel imbalance, wheel hub runout, or front suspension looseness."
     : hasMisfire
     ? "Possible ignition breakdown, injector delivery issue, or mixture problem under load."
     : hasOverheat
