@@ -271,7 +271,7 @@ function buildSystemQuestion({ isEs, text, system, used }) {
     return block({
       isEs,
       summary: isEs
-        ? "La vibración de frenos depende من velocidad y dónde se siente."
+        ? "La vibración de frenos depende de la velocidad y de dónde se siente."
         : "Brake vibration depends on speed and where it is felt.",
       question: isEs
         ? "¿La vibración aparece más al frenar en highway?"
