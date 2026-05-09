@@ -148,8 +148,8 @@ function buildSystemQuestion({ isEs, text, system, used }) {
       return block({
         isEs,
         summary: isEs
-          ? "La pérdida de potencia con check engine flashing apunta a misfire bajo carga."
-          : "Power loss with a flashing check engine light points toward a misfire under load.",
+          ? "La pérdida de potencia o sacudida bajo carga apunta a misfire o combustión inestable."
+          : "Power loss or shaking under load points toward misfire or unstable combustion.",
         question: isEs
           ? "¿La falla aparece más al acelerar fuerte/subir loma o también en idle?"
           : "Does it happen mostly under hard acceleration/uphill, or also at idle?",
@@ -271,7 +271,7 @@ function buildSystemQuestion({ isEs, text, system, used }) {
     return block({
       isEs,
       summary: isEs
-        ? "La vibración de frenos depende de velocidad y dónde se siente."
+        ? "La vibración de frenos depende من velocidad y dónde se siente."
         : "Brake vibration depends on speed and where it is felt.",
       question: isEs
         ? "¿La vibración aparece más al frenar en highway?"
@@ -288,6 +288,108 @@ function buildSystemQuestion({ isEs, text, system, used }) {
 function buildGeneralQuestion({ isEs, text, used }) {
   const noSmoke = hasNegation(text, ["smoke", "visible smoke"]);
   const noFuel = hasNegation(text, ["fuel smell", "gas smell", "raw fuel"]);
+
+  const hasHighway = includesAny(text, [
+    "highway",
+    "freeway",
+    "interstate",
+    "at speed",
+    "high speed",
+    "60 mph",
+    "65 mph",
+    "70 mph",
+  ]);
+
+  const hasSlowsDown = includesAny(text, [
+    "slows down",
+    "slow down",
+    "when i slow",
+    "goes away when i slow",
+    "stops when i slow",
+    "stops shaking when i slow",
+  ]);
+
+  const hasVibration = includesAny(text, [
+    "vibration",
+    "vibrate",
+    "vibrates",
+    "shake",
+    "shakes",
+    "shaking",
+    "wobble",
+    "wobbles",
+  ]);
+
+  const hasBrakeWords = includesAny(text, [
+    "brake",
+    "braking",
+    "when braking",
+    "brake pedal",
+    "pedal",
+  ]);
+
+  const hasSteeringWords = includesAny(text, [
+    "steering",
+    "steering wheel",
+    "wheel shakes",
+    "front end",
+  ]);
+
+  if (
+    hasVibration &&
+    (hasHighway || hasSlowsDown) &&
+    !used(["steering wheel", "seat", "floor", "pedal", "where do you feel"])
+  ) {
+    return block({
+      isEs,
+      summary: isEs
+        ? "La vibración a velocidad alta cambia mucho según dónde se siente."
+        : "High-speed vibration changes diagnosis depending on where you feel it.",
+      question: isEs
+        ? "¿Dónde sientes más la vibración: volante, asiento/piso, o pedal de freno?"
+        : "Where do you feel the vibration most: steering wheel, seat/floor, or brake pedal?",
+      options: isEs
+        ? ["Volante", "Asiento/piso", "Pedal de freno", "Todo el carro"]
+        : ["Steering wheel", "Seat/floor", "Brake pedal", "Whole car"],
+    });
+  }
+
+  if (
+    hasVibration &&
+    !hasBrakeWords &&
+    !used(["braking", "accelerating", "coasting", "steady speed"])
+  ) {
+    return block({
+      isEs,
+      summary: isEs
+        ? "La vibración necesita separarse entre rueda/llanta, eje, motor o frenos."
+        : "Vibration needs to be separated between wheel/tire, axle, engine, or brake-related causes.",
+      question: isEs
+        ? "¿La vibración aparece al mantener velocidad, al acelerar, al frenar o al soltar el acelerador?"
+        : "Does the vibration happen while holding speed, accelerating, braking, or coasting?",
+      options: isEs
+        ? ["Manteniendo velocidad", "Acelerando", "Frenando", "Soltando acelerador"]
+        : ["Holding speed", "Accelerating", "Braking", "Coasting"],
+    });
+  }
+
+  if (
+    hasSteeringWords &&
+    !used(["left", "right", "pull", "alignment", "tire balance"])
+  ) {
+    return block({
+      isEs,
+      summary: isEs
+        ? "Si se siente en el volante, primero se separa tire balance de suspensión o alineación."
+        : "If it is felt in the steering wheel, the first split is tire balance versus suspension or alignment.",
+      question: isEs
+        ? "¿El volante también se jala a un lado o solo vibra?"
+        : "Does the steering wheel also pull to one side, or only vibrate?",
+      options: isEs
+        ? ["Solo vibra", "Jala a un lado", "Empeora con velocidad", "No sé"]
+        : ["Only vibrates", "Pulls to one side", "Worse with speed", "Not sure"],
+    });
+  }
 
   const hasPowerLoss = includesAny(text, [
     "loss of power",
@@ -315,10 +417,7 @@ function buildGeneralQuestion({ isEs, text, used }) {
   ]);
 
   const hasShake = includesAny(text, [
-    "shake",
-    "shaking",
     "rough idle",
-    "vibration",
     "misfire",
     "rough under load",
     "engine feels rough",
@@ -343,7 +442,7 @@ function buildGeneralQuestion({ isEs, text, used }) {
     return block({
       isEs,
       summary: isEs
-        ? "الأعراض تشير إلى misfire أو ضعف احتراق تحت الحمل."
+        ? "Los síntomas apuntan a misfire o combustión inestable bajo carga."
         : "The symptoms point toward misfire or combustion breakdown under load.",
       question: isEs
         ? "¿La falla aparece más al acelerar fuerte/subir loma o también en idle?"
@@ -417,14 +516,14 @@ function buildGeneralQuestion({ isEs, text, used }) {
   return block({
     isEs,
     summary: isEs
-      ? "Necesito un detalle más para separar las causas probables."
-      : "I need one more detail to separate the likely causes.",
+      ? "Necesito un detalle específico para separar el sistema afectado."
+      : "I need one specific detail to separate the affected system.",
     question: isEs
-      ? "¿Qué cambia más cuando aparece el problema?"
-      : "What changes the most when the problem appears?",
+      ? "¿Cuándo aparece más el problema: acelerando, frenando, en idle o a velocidad constante?"
+      : "When does the problem happen most: accelerating, braking, at idle, or holding steady speed?",
     options: isEs
-      ? ["Ruido", "Olor", "Vibración", "Pérdida de potencia"]
-      : ["Noise", "Smell", "Vibration", "Power loss"],
+      ? ["Acelerando", "Frenando", "En idle", "Velocidad constante"]
+      : ["Accelerating", "Braking", "At idle", "Steady speed"],
   });
 }
 
@@ -443,6 +542,9 @@ ${isEs ? "Pendiente de confirmación diagnóstica." : "Pending diagnostic confir
 Why it fits:
 ${summary}
 
+What to inspect next:
+${question}
+
 What to do next:
 ${question}
 
@@ -452,8 +554,8 @@ ${options.join("\n")}
 When to stop driving:
 ${
   isEs
-    ? "Deja de manejar si el vehículo se siente inseguro, se sobrecalienta, huele a quemado, pierde mucha potencia, o aparece una luz roja."
-    : "Stop driving if the vehicle feels unsafe, overheats, smells like burning, loses strong power, or shows a red warning light."
+    ? "Deja de manejar si el vehículo se siente inseguro, se sobrecalienta, huele a quemado, pierde mucha potencia, vibra fuerte, o aparece una luz roja."
+    : "Stop driving if the vehicle feels unsafe, overheats, smells like burning, loses strong power, shakes badly, or shows a red warning light."
 }`;
 }
 
