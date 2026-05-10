@@ -23,6 +23,7 @@ Your job:
 - Use the user's answers as evidence.
 - Protect the dominant symptom from being diluted by later details.
 - Separate similar automotive patterns like a real technician.
+- Rank likely causes by strength of evidence.
 - Produce a clear final diagnostic direction without pretending certainty.
 `;
 
@@ -37,6 +38,20 @@ Diagnostic reasoning rules:
 - Do not tell the user to replace parts immediately unless the evidence is strong.
 `;
 
+const RANKING_ENGINE_RULES = `
+Dominant Cause Ranking rules:
+- Always rank the strongest likely cause first.
+- Use the user's symptom pattern, answers, OBD insight, and dominant symptom lock as evidence.
+- Do not flatten all causes as equal.
+- Avoid weak phrases like "could be many things" unless evidence is truly missing.
+- Use technician language such as:
+  "The pattern leans more toward..."
+  "This ranks higher because..."
+  "This is less likely unless..."
+- If there is a dominant safety signal, it must stay visible in the final report.
+- If a local ranking is provided, use it as guidance, not as a script.
+`;
+
 const REPORT_ENGINE = `
 Report rules:
 - Return only the final report format.
@@ -45,6 +60,10 @@ Report rules:
 - Answer options must be None.
 - Keep sections concise, specific, and useful.
 - Always include "What to inspect next".
+- The "Likely issue" section must include ranked thinking:
+  Most likely:
+  Secondary possibility:
+  Less likely:
 `;
 
 const BRAND_VOICE = `
@@ -103,6 +122,14 @@ export default async function handler(req, res) {
 
     const realAnswerCount = countUserAnswers(answerList);
     const dominantSignals = detectDominantSignals(safeIssue, answerList);
+    const localRanking = buildDominantCauseRanking({
+      issue: safeIssue,
+      answers: answerList,
+      dominantSignals,
+      obdCode,
+      obdInsight,
+    });
+
     const complexity = detectComplexity(safeIssue, dominantSignals, answerList);
     const readiness = detectDiagnosticReadiness(
       safeIssue,
@@ -141,6 +168,7 @@ export default async function handler(req, res) {
       answers: answerList,
       vehicleProfile: profile,
       dominantSignals,
+      localRanking,
       complexity,
       readiness,
       obdCode,
@@ -162,6 +190,7 @@ export default async function handler(req, res) {
           lang,
           issue: safeIssue,
           dominantSignals,
+          localRanking,
           obdCode,
           obdInsight,
         });
@@ -176,6 +205,7 @@ export default async function handler(req, res) {
         lang: "en",
         issue: "",
         dominantSignals: [],
+        localRanking: null,
         obdCode: "",
         obdInsight: "",
       }),
@@ -447,6 +477,7 @@ function buildAnalysisPrompt({
   answers,
   vehicleProfile,
   dominantSignals,
+  localRanking,
   complexity,
   readiness,
   obdCode,
@@ -473,10 +504,14 @@ function buildAnalysisPrompt({
     ? dominantSignals.join(", ")
     : "None detected";
 
+  const rankingText = formatRankingForPrompt(localRanking);
+
   return `
 ${SYSTEM_BRAIN}
 
 ${DIAGNOSTIC_REASONING}
+
+${RANKING_ENGINE_RULES}
 
 ${REPORT_ENGINE}
 
@@ -502,6 +537,9 @@ ${hasObdCode ? obdCode : "None"}
 Dominant symptom lock:
 ${dominantText}
 
+Local dominant cause ranking:
+${rankingText}
+
 OBD intelligence insight:
 ${obdInsight || "None"}
 
@@ -519,6 +557,8 @@ Use the data above to produce a specific DriveShift final diagnostic report.
 Do not ask another question.
 Do not output markdown tables.
 Do not include confidence percentage.
+Do not make all causes equal.
+Rank the causes like a senior technician.
 
 Output exactly this format:
 
@@ -531,10 +571,12 @@ Risk level:
 [High or Medium or Low]
 
 Likely issue:
-[one specific likely issue or a tight cluster of closely related causes]
+Most likely: [strongest cause]
+Secondary possibility: [second cause]
+Less likely: [third cause or "less likely unless new evidence appears"]
 
 Why it fits:
-[connect the user's symptoms and answers directly to the likely issue]
+[connect the user's symptoms and answers directly to the ranking]
 
 What to inspect next:
 [specific practical checks in the best order]
@@ -566,7 +608,7 @@ async function requestOpenAIReport(prompt) {
         model: process.env.DRIVESHIFT_MODEL || "gpt-4o-mini",
         input: prompt,
         temperature: 0.08,
-        max_output_tokens: 900,
+        max_output_tokens: 1000,
       }),
     });
 
@@ -582,7 +624,225 @@ async function requestOpenAIReport(prompt) {
   }
 }
 
-function buildFastAnalysis({ lang, issue, dominantSignals, obdCode, obdInsight }) {
+function buildDominantCauseRanking({
+  issue,
+  answers,
+  dominantSignals,
+  obdCode,
+  obdInsight,
+}) {
+  const text = [
+    String(issue || ""),
+    Array.isArray(answers)
+      ? answers.map((a) => `${a?.question || ""} ${a?.answer || ""}`).join(" ")
+      : "",
+    Array.isArray(dominantSignals) ? dominantSignals.join(" ") : "",
+    String(obdCode || ""),
+    String(obdInsight || ""),
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  const scores = [];
+
+  const add = (key, label, points, evidence) => {
+    const existing = scores.find((x) => x.key === key);
+    if (existing) {
+      existing.score += points;
+      existing.evidence.push(evidence);
+    } else {
+      scores.push({
+        key,
+        label,
+        score: points,
+        evidence: [evidence],
+      });
+    }
+  };
+
+  if (includesAny(text, ["flashing check engine", "cel flashes", "misfire", "p0300", "p0301", "p0302", "p0303", "p0304"])) {
+    add(
+      "ignition_misfire",
+      "Ignition misfire or spark breakdown under load",
+      35,
+      "misfire or flashing check engine signal"
+    );
+  }
+
+  if (includesAny(text, ["under load", "heavy load", "uphill", "accelerating", "weak acceleration", "hesitating", "hesitates", "rough under load"])) {
+    add(
+      "ignition_misfire",
+      "Ignition misfire or spark breakdown under load",
+      22,
+      "symptom appears under acceleration or load"
+    );
+    add(
+      "fuel_delivery",
+      "Fuel delivery weakness under demand",
+      14,
+      "load-related power demand can expose fuel delivery weakness"
+    );
+  }
+
+  if (includesAny(text, ["fuel smell", "gas smell", "raw fuel", "smells like fuel", "smells like gas"])) {
+    add(
+      "rich_fuel_condition",
+      "Rich fuel condition, leaking injector, or unburned fuel from misfire",
+      30,
+      "fuel smell is a strong dominant signal"
+    );
+  }
+
+  if (includesAny(text, ["black smoke", "dark smoke"])) {
+    add(
+      "rich_fuel_condition",
+      "Rich fuel condition, leaking injector, or fuel pressure regulation fault",
+      36,
+      "black smoke strongly points toward rich mixture"
+    );
+  }
+
+  if (includesAny(text, ["high fuel trim", "positive fuel trim", "lean code", "p0171", "p0174"])) {
+    add(
+      "lean_condition",
+      "Lean condition from vacuum leak, unmetered air, or weak fuel delivery",
+      32,
+      "fuel trim or lean code evidence"
+    );
+  }
+
+  if (includesAny(text, ["overheat", "overheating", "coolant", "steam", "temperature light", "temp gauge"])) {
+    add(
+      "cooling_system",
+      "Cooling system fault or coolant loss",
+      45,
+      "overheating or coolant symptom is safety-relevant"
+    );
+  }
+
+  if (includesAny(text, ["brake", "braking", "pedal", "rotor", "grinding"])) {
+    add(
+      "brake_system",
+      "Brake rotor runout, pad issue, caliper drag, or brake hardware fault",
+      38,
+      "brake-related vibration or braking symptom"
+    );
+  }
+
+  if (includesAny(text, ["steering wheel", "highway vibration", "wobble", "wheel vibration"])) {
+    add(
+      "wheel_tire_suspension",
+      "Wheel balance, tire defect, hub runout, or front suspension looseness",
+      30,
+      "vibration location and speed pattern"
+    );
+  }
+
+  if (isTrueNoStart(text)) {
+    add(
+      "starting_system",
+      "Battery, starter command, relay, fuse, or main power connection fault",
+      40,
+      "true no-start symptom"
+    );
+  }
+
+  if (includesAny(text, ["single click", "only click", "starter clicks"])) {
+    add(
+      "starting_system",
+      "Starter motor, weak battery, relay, or power cable voltage drop",
+      34,
+      "clicking during start attempt"
+    );
+  }
+
+  if (includesAny(text, ["no crank", "does nothing", "no sound"])) {
+    add(
+      "electrical_power",
+      "Battery power, ignition switch signal, starter relay, or main fuse issue",
+      36,
+      "no-crank or no-response symptom"
+    );
+  }
+
+  if (includesAny(text, ["burning smell", "smoke", "electrical smell"])) {
+    add(
+      "safety_electrical_or_heat",
+      "Electrical overheating, belt friction, oil leak on hot surface, or severe heat source",
+      42,
+      "burning smell or smoke is safety-relevant"
+    );
+  }
+
+  if (obdCode) {
+    add(
+      "obd_confirmed_fault",
+      `OBD-confirmed diagnostic path for ${obdCode}`,
+      28,
+      "OBD code is present and should guide confirmation checks"
+    );
+  }
+
+  if (!scores.length) {
+    return {
+      mostLikely: "Targeted inspection needed based on the main symptom",
+      secondary: "Related electrical, sensor, mechanical, or fluid issue",
+      lessLikely: "Less likely causes should stay secondary until stronger evidence appears",
+      evidence: ["Not enough dominant pattern evidence for a narrow local ranking"],
+      raw: [],
+    };
+  }
+
+  scores.sort((a, b) => b.score - a.score);
+
+  const first = scores[0];
+  const second = scores[1] || {
+    label: "Secondary related system fault",
+    evidence: ["Not enough evidence for a strong second cause"],
+  };
+  const third = scores[2] || {
+    label: "Less likely unless new evidence appears",
+    evidence: ["No strong third pattern detected"],
+  };
+
+  return {
+    mostLikely: first.label,
+    secondary: second.label,
+    lessLikely: third.label,
+    evidence: first.evidence,
+    raw: scores,
+  };
+}
+
+function formatRankingForPrompt(ranking) {
+  if (!ranking) return "None";
+
+  const raw = Array.isArray(ranking.raw) ? ranking.raw : [];
+
+  const details = raw
+    .slice(0, 5)
+    .map((item, index) => {
+      const ev = Array.isArray(item.evidence) ? item.evidence.join("; ") : "";
+      return `${index + 1}. ${item.label} — score ${item.score}. Evidence: ${ev}`;
+    })
+    .join("\n");
+
+  return `Most likely: ${ranking.mostLikely}
+Secondary possibility: ${ranking.secondary}
+Less likely: ${ranking.lessLikely}
+Primary evidence: ${(ranking.evidence || []).join("; ") || "None"}
+Ranked candidates:
+${details || "None"}`;
+}
+
+function buildFastAnalysis({
+  lang,
+  issue,
+  dominantSignals,
+  localRanking,
+  obdCode,
+  obdInsight,
+}) {
   const isEs = lang === "es";
 
   const text = [
@@ -619,23 +879,29 @@ function buildFastAnalysis({ lang, issue, dominantSignals, obdCode, obdInsight }
 
   const risk = hasOverheat || hasBrake ? "High" : "Medium";
 
+  const ranking =
+    localRanking ||
+    buildDominantCauseRanking({
+      issue,
+      answers: [],
+      dominantSignals,
+      obdCode,
+      obdInsight,
+    });
+
   const likely = hasObd
-    ? obdInsight || `OBD-related fault ${obdCode}`
-    : hasBrake
-    ? "Possible rotor runout, tire/wheel imbalance, wheel hub runout, or front suspension looseness."
-    : hasMisfire
-    ? "Possible ignition breakdown, injector delivery issue, or mixture problem under load."
-    : hasOverheat
-    ? "Possible cooling system fault or overheating risk."
-    : hasNoStart
-    ? "Possible weak battery, starter command failure, relay/fuse issue, or power connection problem."
-    : "Possible vehicle system fault that needs targeted inspection.";
+    ? `Most likely: ${obdInsight || `OBD-related fault ${obdCode}`}
+Secondary possibility: ${ranking.secondary}
+Less likely: ${ranking.lessLikely}`
+    : `Most likely: ${ranking.mostLikely}
+Secondary possibility: ${ranking.secondary}
+Less likely: ${ranking.lessLikely}`;
 
   if (isEs) {
     return `Diagnosis status: analysis
 
 Voice summary:
-DriveShift encontró una dirección probable que debe confirmarse con revisiones reales.
+DriveShift encontró una dirección probable y la ordenó por fuerza de evidencia.
 
 Risk level:
 ${risk}
@@ -644,10 +910,10 @@ Likely issue:
 ${likely}
 
 Why it fits:
-Los síntomas apuntan a esa dirección, pero todavía falta confirmarlo con inspección, datos OBD o pruebas básicas.
+El patrón principal y las señales dominantes apuntan primero a la causa más fuerte. Las otras posibilidades quedan secundarias hasta que una inspección o datos OBD cambien la dirección.
 
 What to inspect next:
-Revisa códigos guardados, voltaje de batería, conectores, fusibles, sensores relacionados, fugas, olores, vibración y comportamiento bajo carga o frenado.
+Primero confirma la causa principal con códigos OBD, datos en vivo, inspección visual, conectores, fugas, olores, vibración y comportamiento bajo carga o frenado. Después revisa la posibilidad secundaria.
 
 What to do next:
 Evita manejar fuerte hasta confirmar la causa. Haz una prueba controlada o una inspección profesional antes de cambiar piezas.
@@ -662,7 +928,7 @@ Deja de manejar si el auto se siente inseguro, se sobrecalienta, huele a quemado
   return `Diagnosis status: analysis
 
 Voice summary:
-DriveShift found a likely diagnostic direction that should be confirmed with real checks.
+DriveShift found a likely direction and ranked it by evidence strength.
 
 Risk level:
 ${risk}
@@ -671,10 +937,10 @@ Likely issue:
 ${likely}
 
 Why it fits:
-The symptoms point toward this direction, but it still needs confirmation with inspection, OBD data, or basic testing.
+The dominant symptom pattern points first toward the highest-ranked cause. The other possibilities remain secondary unless inspection or OBD data shifts the direction.
 
 What to inspect next:
-Check stored codes, battery voltage, wiring connectors, fuses, related sensors, leaks, smells, vibration behavior, and behavior under load or braking.
+Confirm the top-ranked cause first with stored codes, live data, visual inspection, connectors, leaks, smells, vibration behavior, and behavior under load or braking. Then check the secondary possibility.
 
 What to do next:
 Avoid hard driving until the cause is confirmed. Use a controlled test or professional inspection before replacing parts.
@@ -738,6 +1004,7 @@ function ensureAnalysisFormat(text, lang) {
     lang,
     issue: "",
     dominantSignals: [],
+    localRanking: null,
     obdCode: "",
     obdInsight: "",
   });
