@@ -25,6 +25,7 @@ Your job:
 - Separate similar automotive patterns like a real technician.
 - Rank likely causes by strength of evidence.
 - Use mechanic pattern memory when symptom combinations match known diagnostic patterns.
+- Think in compound symptom patterns, not isolated keywords.
 - Produce a clear final diagnostic direction without pretending certainty.
 `;
 
@@ -42,7 +43,7 @@ Diagnostic reasoning rules:
 const RANKING_ENGINE_RULES = `
 Dominant Cause Ranking rules:
 - Always rank the strongest likely cause first.
-- Use the user's symptom pattern, answers, OBD insight, dominant symptom lock, and mechanic pattern memory as evidence.
+- Use the user's symptom pattern, answers, OBD insight, dominant symptom lock, compound pattern memory, and safety signals as evidence.
 - Do not flatten all causes as equal.
 - Avoid weak phrases like "could be many things" unless evidence is truly missing.
 - Use technician language such as:
@@ -60,6 +61,9 @@ Pattern Memory rules:
 - Suppressed causes should not dominate the report unless direct evidence proves them.
 - If fuel smell appears with flashing CEL and heavy load, treat the smell more as unburned fuel from misfire before jumping to vacuum leak.
 - Do not over-rank vacuum leaks when fuel smell, black smoke, or raw fuel smell is present.
+- Brake vibration during braking is different from tire imbalance at steady speed.
+- Coolant loss with overheating is a safety pattern until proven otherwise.
+- A red warning light, flashing check engine light, brake issue, fuel smell, burning smell, or overheating must raise safety awareness.
 - When a pattern matches, explain why that combination matters.
 `;
 
@@ -123,21 +127,21 @@ const STRONG_PATTERNS = [
       {
         key: "ignition_misfire",
         label: "Ignition misfire or spark breakdown under heavy load",
-        boost: 45,
+        boost: 55,
         evidence:
-          "flashing CEL with power loss under load points strongly toward incomplete combustion",
+          "flashing CEL with power loss under load strongly points toward incomplete combustion",
       },
       {
         key: "rich_fuel_condition",
         label: "Unburned fuel from misfire, rich mixture, or leaking injector",
-        boost: 32,
+        boost: 36,
         evidence:
           "fuel smell fits unburned fuel when combustion breaks down under load",
       },
       {
         key: "fuel_delivery",
         label: "Fuel delivery weakness under demand",
-        boost: 10,
+        boost: 12,
         evidence:
           "heavy load can still expose fuel pressure or fuel volume weakness",
       },
@@ -147,7 +151,7 @@ const STRONG_PATTERNS = [
         key: "lean_condition",
         reason:
           "vacuum leak or lean condition should not outrank misfire when fuel smell and flashing CEL are present",
-        penalty: 30,
+        penalty: 38,
       },
     ],
   },
@@ -171,7 +175,7 @@ const STRONG_PATTERNS = [
         key: "rich_fuel_condition",
         label:
           "Rich fuel condition, leaking injector, or fuel pressure regulation fault",
-        boost: 50,
+        boost: 58,
         evidence:
           "black smoke with fuel smell strongly points toward rich mixture or overfueling",
       },
@@ -188,20 +192,53 @@ const STRONG_PATTERNS = [
         key: "lean_condition",
         reason:
           "black smoke and raw fuel smell are not primary vacuum leak signals",
-        penalty: 45,
+        penalty: 50,
       },
     ],
   },
   {
-    name: "brake_vibration_highway",
+    name: "brake_pedal_vibration",
     triggers: [
       "brake",
       "braking",
+      "brake pedal",
+      "pedal vibration",
+      "pulsation",
+      "pulsing",
+      "rotor",
+      "stopping",
+      "vibration when braking",
+    ],
+    minimumHits: 2,
+    prioritize: [
+      {
+        key: "brake_system",
+        label: "Brake rotor runout, pad transfer, caliper drag, or hub runout",
+        boost: 55,
+        evidence:
+          "vibration tied directly to braking points first toward brake rotor, hub, or caliper-related runout",
+      },
+    ],
+    suppress: [
+      {
+        key: "wheel_tire_suspension",
+        reason:
+          "tire balance should not outrank brake diagnosis when vibration happens mainly during braking",
+        penalty: 18,
+      },
+    ],
+  },
+  {
+    name: "highway_vibration_not_braking",
+    triggers: [
       "highway",
       "freeway",
       "high speed",
+      "65 mph",
+      "70 mph",
       "steering wheel",
-      "pedal",
+      "seat",
+      "floor",
       "vibration",
       "shaking",
       "wobble",
@@ -209,18 +246,18 @@ const STRONG_PATTERNS = [
     minimumHits: 3,
     prioritize: [
       {
-        key: "brake_system",
-        label: "Brake rotor runout, pad transfer, caliper drag, or hub runout",
+        key: "wheel_tire_suspension",
+        label: "Wheel balance, tire defect, bent wheel, hub runout, or front suspension looseness",
         boost: 42,
         evidence:
-          "vibration tied to braking points first toward brake or hub related runout",
+          "vibration at steady highway speed points first toward rotating wheel, tire, hub, or suspension issues",
       },
       {
-        key: "wheel_tire_suspension",
-        label: "Wheel balance, tire defect, or front suspension looseness",
-        boost: 18,
+        key: "brake_system",
+        label: "Brake rotor or hub runout if vibration changes during braking",
+        boost: 12,
         evidence:
-          "high-speed vibration can also involve rotating wheel, tire, or suspension parts",
+          "brake/hub runout remains secondary unless vibration is tied to brake application",
       },
     ],
   },
@@ -243,9 +280,91 @@ const STRONG_PATTERNS = [
         key: "cooling_system",
         label:
           "Cooling system leak, pressure loss, thermostat, fan, or water pump fault",
-        boost: 55,
+        boost: 60,
         evidence:
-          "overheating with coolant symptoms is a high-priority cooling-system pattern",
+          "overheating with coolant symptoms is a high-priority cooling-system safety pattern",
+      },
+    ],
+  },
+  {
+    name: "white_smoke_coolant_overheat",
+    triggers: [
+      "white smoke",
+      "sweet smell",
+      "coolant smell",
+      "coolant loss",
+      "low coolant",
+      "overheating",
+      "overheat",
+      "rough start",
+    ],
+    minimumHits: 3,
+    prioritize: [
+      {
+        key: "head_gasket_or_internal_coolant_leak",
+        label: "Possible head gasket leak or internal coolant intrusion",
+        boost: 62,
+        evidence:
+          "white smoke, coolant loss, sweet smell, and overheating together raise concern for internal coolant entry",
+      },
+      {
+        key: "cooling_system",
+        label: "Cooling system pressure loss or external coolant leak",
+        boost: 35,
+        evidence:
+          "coolant loss still requires pressure testing before confirming internal failure",
+      },
+    ],
+  },
+  {
+    name: "no_crank_clicking",
+    triggers: [
+      "no crank",
+      "single click",
+      "rapid click",
+      "clicking",
+      "only clicks",
+      "starter clicks",
+      "lights dim",
+      "battery",
+    ],
+    minimumHits: 2,
+    prioritize: [
+      {
+        key: "starting_system",
+        label: "Weak battery, voltage drop, starter motor, relay, or main power connection fault",
+        boost: 50,
+        evidence:
+          "clicking or no-crank behavior separates starter/battery power faults from crank-no-start faults",
+      },
+      {
+        key: "electrical_power",
+        label: "Main power cable, ground, fuse, ignition switch signal, or relay issue",
+        boost: 28,
+        evidence:
+          "no-crank conditions often require voltage-drop and control-circuit checks",
+      },
+    ],
+  },
+  {
+    name: "crank_no_start",
+    triggers: [
+      "cranks but won't start",
+      "cranks but does not start",
+      "crank no start",
+      "cranks normally",
+      "turns over",
+      "won't fire",
+      "no start",
+    ],
+    minimumHits: 2,
+    prioritize: [
+      {
+        key: "crank_no_start_path",
+        label: "Crank-no-start path: fuel delivery, spark, injector pulse, compression, or immobilizer",
+        boost: 48,
+        evidence:
+          "engine cranking separates this from starter/battery faults and moves diagnosis toward fuel, spark, injector pulse, compression, or security",
       },
     ],
   },
@@ -359,7 +478,6 @@ export default async function handler(req, res) {
     });
 
     const aiText = await requestOpenAIReport(prompt);
-
     let result = aiText ? cleanAndFinalize(aiText, lang) : "";
 
     if (!result || looksLikeFollowUp(result)) {
@@ -394,15 +512,7 @@ export default async function handler(req, res) {
 
 function buildSmartFollowUp({ lang, issue, answers }) {
   const isEs = lang === "es";
-  const text = [
-    String(issue || ""),
-    ...(Array.isArray(answers)
-      ? answers.map((a) => `${a?.question || ""} ${a?.answer || ""}`)
-      : []),
-  ]
-    .join(" ")
-    .toLowerCase();
-
+  const text = buildCombinedText(issue, answers);
   const asked = Array.isArray(answers)
     ? answers.map((a) => String(a?.question || "").toLowerCase()).join(" ")
     : "";
@@ -449,6 +559,7 @@ function buildSmartFollowUp({ lang, issue, answers }) {
     "gas smell",
     "smells like fuel",
     "smells like gas",
+    "raw fuel",
   ]);
 
   const hasNoStart = isTrueNoStart(text);
@@ -539,7 +650,7 @@ function shouldForceFinal({
   const flowDecision = String(flowControl?.localDecision || "").toLowerCase();
   if (flowDecision === "final" || flowDecision === "analysis") return true;
 
-  const hasControlAnswer = answerList.some((a) => {
+  return answerList.some((a) => {
     const q = String(a?.question || "").toLowerCase();
     const ans = String(a?.answer || "").toLowerCase();
 
@@ -551,21 +662,12 @@ function shouldForceFinal({
       ans.includes("interview is complete")
     );
   });
-
-  return hasControlAnswer;
 }
 
 function buildSecondFollowUp({ lang, issue, answers }) {
   const isEs = lang === "es";
   const system = detectSystem(issue);
-  const text = [
-    String(issue || ""),
-    ...(Array.isArray(answers)
-      ? answers.map((a) => `${a?.question || ""} ${a?.answer || ""}`)
-      : []),
-  ]
-    .join(" ")
-    .toLowerCase();
+  const text = buildCombinedText(issue, answers);
 
   if (
     system === "engine_drivability" ||
@@ -667,8 +769,6 @@ function buildAnalysisPrompt({
   hasObdCode,
   obdInsight,
   realAnswerCount,
-  flowControl,
-  localDiagnosticDraft,
 }) {
   const vehicleText = buildVehicleText(vehicleProfile);
 
@@ -750,6 +850,7 @@ Do not make all causes equal.
 Rank the causes like a senior technician.
 If mechanic pattern memory matched, use it to keep the strongest pattern on top.
 Do not let a suppressed cause dominate unless the user gave direct evidence for it.
+Use decisive but safe language.
 
 Output exactly this format:
 
@@ -798,13 +899,12 @@ async function requestOpenAIReport(prompt) {
       body: JSON.stringify({
         model: process.env.DRIVESHIFT_MODEL || "gpt-4o-mini",
         input: prompt,
-        temperature: 0.08,
-        max_output_tokens: 1000,
+        temperature: 0.06,
+        max_output_tokens: 1050,
       }),
     });
 
     clearTimeout(timeout);
-
     if (!response.ok) return "";
 
     const data = await response.json();
@@ -823,10 +923,7 @@ function applyPatternMemory({
   obdInsight,
 }) {
   const text = [
-    String(issue || ""),
-    Array.isArray(answers)
-      ? answers.map((a) => `${a?.question || ""} ${a?.answer || ""}`).join(" ")
-      : "",
+    buildCombinedText(issue, answers),
     Array.isArray(dominantSignals) ? dominantSignals.join(" ") : "",
     String(obdCode || ""),
     String(obdInsight || ""),
@@ -889,10 +986,7 @@ function buildDominantCauseRanking({
   patternMemory,
 }) {
   const text = [
-    String(issue || ""),
-    Array.isArray(answers)
-      ? answers.map((a) => `${a?.question || ""} ${a?.answer || ""}`).join(" ")
-      : "",
+    buildCombinedText(issue, answers),
     Array.isArray(dominantSignals) ? dominantSignals.join(" ") : "",
     String(obdCode || ""),
     String(obdInsight || ""),
@@ -904,6 +998,7 @@ function buildDominantCauseRanking({
 
   const add = (key, label, points, evidence) => {
     const existing = scores.find((x) => x.key === key);
+
     if (existing) {
       existing.score += points;
       existing.evidence.push(evidence);
@@ -957,6 +1052,7 @@ function buildDominantCauseRanking({
       22,
       "symptom appears under acceleration or load"
     );
+
     add(
       "fuel_delivery",
       "Fuel delivery weakness under demand",
@@ -1114,7 +1210,9 @@ function buildDominantCauseRanking({
     }
   }
 
-  if (!scores.length) {
+  const cleanedScores = scores.filter((item) => item.score > 0);
+
+  if (!cleanedScores.length) {
     return {
       mostLikely: "Targeted inspection needed based on the main symptom",
       secondary: "Related electrical, sensor, mechanical, or fluid issue",
@@ -1125,15 +1223,17 @@ function buildDominantCauseRanking({
     };
   }
 
-  scores.sort((a, b) => b.score - a.score);
+  cleanedScores.sort((a, b) => b.score - a.score);
 
-  const first = scores[0];
-  const second = scores[1] || {
+  const first = cleanedScores[0];
+  const second = cleanedScores[1] || {
     label: "Secondary related system fault",
+    score: 0,
     evidence: ["Not enough evidence for a strong second cause"],
   };
-  const third = scores[2] || {
+  const third = cleanedScores[2] || {
     label: "Less likely unless new evidence appears",
+    score: 0,
     evidence: ["No strong third pattern detected"],
   };
 
@@ -1142,7 +1242,7 @@ function buildDominantCauseRanking({
     secondary: second.label,
     lessLikely: third.label,
     evidence: first.evidence,
-    raw: scores,
+    raw: cleanedScores,
   };
 }
 
@@ -1152,7 +1252,7 @@ function formatRankingForPrompt(ranking) {
   const raw = Array.isArray(ranking.raw) ? ranking.raw : [];
 
   const details = raw
-    .slice(0, 5)
+    .slice(0, 6)
     .map((item, index) => {
       const ev = Array.isArray(item.evidence) ? item.evidence.join("; ") : "";
       return `${index + 1}. ${item.label} — score ${item.score}. Evidence: ${ev}`;
@@ -1361,6 +1461,8 @@ function removeFollowUpLanguage(text) {
       "The available details now point toward"
     )
     .replace(/Before I can diagnose/gi, "Based on the available details")
+    .replace(/could be related to/gi, "is more consistent with")
+    .replace(/may be related to/gi, "fits better with")
     .trim();
 }
 
@@ -1392,6 +1494,17 @@ function buildVehicleText(profile) {
   if (mileage) parts.push(`Mileage: ${mileage}`);
 
   return parts.length ? parts.join(", ") : "Unknown vehicle.";
+}
+
+function buildCombinedText(issue, answers) {
+  return [
+    String(issue || ""),
+    ...(Array.isArray(answers)
+      ? answers.map((a) => `${a?.question || ""} ${a?.answer || ""}`)
+      : []),
+  ]
+    .join(" ")
+    .toLowerCase();
 }
 
 function extractText(data) {
@@ -1430,6 +1543,8 @@ function isTrueNoStart(text) {
     "cranks but does not start",
     "starter clicks",
     "only clicks",
+    "crank no start",
+    "turns over but won't start",
   ];
 
   return phrases.some((p) => clean.includes(p));
