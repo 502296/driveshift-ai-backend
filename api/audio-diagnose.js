@@ -184,6 +184,18 @@ function analyzeAudioSignal({ audioBase64, audioFormat, durationSeconds }) {
       hints.push("hissing_air_noise_possible");
       evidence.push("Noisy high-frequency texture may fit hissing, air leak, or exhaust leak.");
     }
+    const advanced = buildAdvancedAcousticProfile({
+  signalHints: hints,
+  rms,
+  peak,
+  zcr,
+  pulseRate: pulse.pulseRate,
+  pulseRegularity: pulse.regularity,
+  lowRatio: spectral.lowRatio,
+  midRatio: spectral.midRatio,
+  highRatio: spectral.highRatio,
+  midHighRatio: spectral.midHighRatio,
+});
 
     return {
       available: true,
@@ -199,6 +211,8 @@ function analyzeAudioSignal({ audioBase64, audioFormat, durationSeconds }) {
       midRatio: round(spectral.midRatio),
       highRatio: round(spectral.highRatio),
       midHighRatio: round(spectral.midHighRatio),
+      advancedProfile: advanced.profile,
+      advancedSignatures: advanced.signatures,
       hints,
       evidence,
     };
@@ -934,6 +948,133 @@ function extractText(data) {
   } catch (_) {
     return "";
   }
+}
+
+function buildAdvancedAcousticProfile({
+  signalHints,
+  rms,
+  peak,
+  zcr,
+  pulseRate,
+  pulseRegularity,
+  lowRatio,
+  midRatio,
+  highRatio,
+  midHighRatio,
+}) {
+  const signatures = [];
+
+  const addSig = (key, label, confidence, why) => {
+    signatures.push({ key, label, confidence, why });
+  };
+
+  const rhythmic = pulseRegularity > 0.35 && pulseRate >= 2;
+  const slowPulse = pulseRate > 0.4 && pulseRate < 4;
+  const fastPulse = pulseRate >= 4 && pulseRate <= 18;
+  const sharpTransient = peak > 0.72;
+  const verySharp = peak > 0.82 || zcr > 0.26;
+  const lowDominant = lowRatio > 0.55;
+  const highTexture = highRatio > 0.22 || zcr > 0.20;
+  const midHighDominant = midHighRatio > 0.48;
+  const steadyLow = lowRatio > 0.45 && pulseRate < 2;
+  const scrapeLike = zcr > 0.22 && midHighRatio > 0.42 && peak > 0.55;
+  const quietButUsable = rms > 0.015 && rms < 0.06;
+
+  if (lowDominant && sharpTransient && slowPulse) {
+    addSig(
+      "rod_knock_signature",
+      "Rod knock / deep mechanical knock signature",
+      82,
+      "Low-frequency dominance with strong transient impacts and slow repeating pulse behavior."
+    );
+  }
+
+  if (fastPulse && rhythmic && midHighDominant) {
+    addSig(
+      "injector_lifter_tick_signature",
+      "Injector tick / lifter tap / valvetrain ticking signature",
+      78,
+      "Regular fast pulse rhythm with mid-high frequency content."
+    );
+  }
+
+  if (highTexture && zcr > 0.24 && pulseRate < 5) {
+    addSig(
+      "belt_chirp_hiss_signature",
+      "Belt chirp / squeal / hissing leak signature",
+      70,
+      "High zero-crossing texture and high-frequency energy suggest squeal, chirp, or air leak."
+    );
+  }
+
+  if (steadyLow && !verySharp) {
+    addSig(
+      "rotational_hum_signature",
+      "Wheel bearing growl / rotational hum signature",
+      66,
+      "Steady low-frequency energy with weak pulse behavior suggests rotational hum or bearing noise."
+    );
+  }
+
+  if (scrapeLike) {
+    addSig(
+      "brake_grind_scrape_signature",
+      "Brake grind / rotor-pad scrape / dust shield contact signature",
+      76,
+      "Sharp mid-high texture with transient peaks suggests scraping or metallic contact."
+    );
+  }
+
+  if (zcr > 0.18 && highRatio > 0.18 && pulseRate >= 1 && pulseRate <= 7) {
+    addSig(
+      "exhaust_puff_signature",
+      "Exhaust leak puff / pressure leak signature",
+      63,
+      "Noisy high-frequency texture with mild pulse behavior can fit exhaust or pressure leak."
+    );
+  }
+
+  if (sharpTransient && midHighDominant && rhythmic) {
+    addSig(
+      "metallic_rattle_signature",
+      "Metallic rattle / loose heat shield / timing chain rattle signature",
+      72,
+      "Sharp transient peaks with rhythmic mid-high content suggest rattling metal."
+    );
+  }
+
+  if (lowDominant && quietButUsable && pulseRate < 2) {
+    addSig(
+      "idle_instability_signature",
+      "Idle instability / engine mount / rough vibration signature",
+      58,
+      "Low-frequency energy with limited repetition can fit idle vibration or mount movement."
+    );
+  }
+
+  signatures.sort((a, b) => b.confidence - a.confidence);
+
+  const profile = {
+    pulseBehavior: rhythmic
+      ? "rhythmic_repetition_detected"
+      : slowPulse
+      ? "slow_pulse_detected"
+      : "weak_or_irregular_pulse",
+    cyclicRhythm: pulseRegularity > 0.5 ? "regular_cycle" : "irregular_cycle",
+    transientSpikes: sharpTransient ? "strong_transient_spikes" : "mild_transients",
+    frequencyBalance: lowDominant
+      ? "low_frequency_dominant"
+      : highTexture
+      ? "high_texture_dominant"
+      : midHighDominant
+      ? "mid_high_energy_dominant"
+      : "balanced_or_unclear",
+    scrapeModulation: scrapeLike ? "scrape_like_texture_detected" : "not_scrape_dominant",
+    idleInstability: lowDominant && pulseRate < 2 ? "possible_idle_or_mount_vibration" : "not_primary",
+    topSignature: signatures[0]?.label || "No strong acoustic signature",
+  };
+
+  return { profile, signatures };
 }
 
 function buildAudioFallbackReport({
