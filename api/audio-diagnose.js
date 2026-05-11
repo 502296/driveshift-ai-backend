@@ -601,6 +601,11 @@ Less likely direction: ${audioIntelligence.lessLikely}
 
 Audio hints:
 ${audioIntelligence.hints.join("\n")}
+Raw audio metrics:
+${audioIntelligence.metricsText || "No metrics"}
+
+Dominant signal classification:
+${audioIntelligence.signalClassification || "Unknown"}
 
 Ranked audio candidates:
 ${audioIntelligence.ranked
