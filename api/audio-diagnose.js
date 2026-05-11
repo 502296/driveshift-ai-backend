@@ -430,6 +430,22 @@ function buildAudioIntelligence({
 
   if (signal?.available) {
     hints.push(...signal.hints);
+    if (signal.advancedProfile) {
+  hints.push(
+    `Advanced acoustic profile: ${JSON.stringify(signal.advancedProfile)}`
+  );
+}
+
+if (Array.isArray(signal.advancedSignatures)) {
+  for (const sig of signal.advancedSignatures.slice(0, 3)) {
+    add(
+      sig.key,
+      sig.label,
+      sig.confidence,
+      sig.why
+    );
+  }
+}
     hints.push(
       `Signal metrics: rms=${signal.rms}, peak=${signal.peak}, zcr=${signal.zcr}, pulseRate=${signal.pulseRate}, lowRatio=${signal.lowRatio}, highRatio=${signal.highRatio}`
     );
