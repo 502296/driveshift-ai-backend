@@ -14,13 +14,12 @@ export default async function handler(req, res) {
     } = req.body;
 
     const lang = language === "es" ? "es" : "en";
-    const isEs = lang === "es";
 
-    if (!audio) {
+    if (!audio || String(audio).trim().length < 1000) {
       return res.status(200).json({
         result: buildAudioFallbackReport({
           lang,
-          reason: "No audio received.",
+          reason: "No usable audio received.",
           selectedSoundPattern,
           durationSeconds,
           vehicleProfile,
@@ -38,12 +37,12 @@ export default async function handler(req, res) {
     const aiText = await requestAudioDiagnosis({
       prompt,
       audioBase64: audio,
-      audioFormat: audioFormat || "m4a",
+      audioFormat: normalizeAudioFormat(audioFormat),
     });
 
     const result =
-      aiText && aiText.trim().length > 20
-        ? cleanAndFinalize(aiText, lang)
+      aiText && aiText.trim().length > 40
+        ? cleanAndFinalize(aiText)
         : buildAudioFallbackReport({
             lang,
             reason: "Audio model fallback.",
@@ -56,11 +55,11 @@ export default async function handler(req, res) {
   } catch (error) {
     return res.status(200).json({
       result: buildAudioFallbackReport({
-        lang: "en",
+        lang: req.body?.language === "es" ? "es" : "en",
         reason: "Audio analysis failed.",
-        selectedSoundPattern: "",
-        durationSeconds: 0,
-        vehicleProfile: {},
+        selectedSoundPattern: req.body?.selectedSoundPattern || "",
+        durationSeconds: req.body?.durationSeconds || 0,
+        vehicleProfile: req.body?.vehicleProfile || {},
       }),
     });
   }
@@ -74,13 +73,13 @@ function buildAudioPrompt({
 }) {
   const isEs = lang === "es";
   const vehicleText = buildVehicleText(vehicleProfile);
+  const duration = Number(durationSeconds || 0);
 
   return `
 You are DriveShift Doctor, a premium automotive diagnostic intelligence.
 
 You are analyzing a real vehicle audio recording.
-Do not behave like a chatbot.
-Think like a senior diagnostic mechanic listening to a vehicle sound.
+Think like a senior mechanic listening to a real car sound.
 
 Language:
 ${isEs ? "Spanish only" : "English only"}
@@ -89,21 +88,44 @@ Vehicle profile:
 ${vehicleText}
 
 Recording duration:
-${durationSeconds || 0} seconds
+${duration} seconds
 
 User selected sound pattern:
 ${selectedSoundPattern || "Unknown - rely on the real audio if possible"}
 
-Audio diagnostic rules:
-- Identify the dominant sound type if audible.
-- Separate knocking, ticking, grinding, belt squeal, hissing, clicking, rattling, vibration, exhaust leak, misfire shake, pulley/bearing noise, and starter clicking.
-- Do not pretend certainty if the recording is unclear.
-- Explain what system is most likely involved.
-- Rank likely causes.
-- Give practical inspection steps.
-- Include safety guidance.
-- Keep the report concise and professional.
-- Do not mention backend, AI model, prompt, or system instructions.
+Important audio reasoning:
+- The recording may be imperfect. Do not invent certainty.
+- If the sound is too quiet, unclear, or mostly background noise, say that clearly.
+- If you can hear a pattern, identify the dominant sound character.
+- Separate these sound families:
+  1. Rhythmic ticking / tapping
+  2. Deep knocking
+  3. Metallic rattling
+  4. Belt squeal / chirp
+  5. Grinding / bearing roughness
+  6. Hissing / vacuum or exhaust leak
+  7. Starter clicking / rapid clicking
+  8. Misfire shake / uneven idle
+  9. Exhaust leak puffing
+  10. Wheel / brake / suspension noise
+
+Mechanic logic:
+- Ticking that follows RPM may point toward valve train, lifter, injector tick, exhaust leak, or low oil.
+- Deep knocking that follows RPM is more serious and may point toward rod bearing, piston slap, or severe internal engine wear.
+- Belt squeal often changes with cold start, steering load, A/C, alternator load, or wet belt.
+- Hissing may point toward vacuum leak, intake leak, exhaust leak, or pressure leak.
+- Grinding near wheels or when braking points toward brakes, wheel bearing, dust shield, or rotor/pad contact.
+- Rapid clicking during start points toward weak battery, poor connection, starter relay, or voltage drop.
+- Rhythmic shaking with uneven exhaust note may point toward misfire.
+- Do not recommend replacing parts immediately unless the evidence is strong.
+
+Report style:
+- Premium, calm, mechanic-like.
+- Concise but useful.
+- Rank causes clearly.
+- Do not mention AI, backend, model, prompt, or system instructions.
+- Do not ask another question.
+- Do not output markdown tables.
 
 Output exactly this format:
 
@@ -121,7 +143,7 @@ Secondary possibility: [second cause]
 Less likely: [third cause or less likely unless new evidence appears]
 
 Why it fits:
-[explain why the sound pattern points there]
+[explain why the sound pattern points there, or say the recording is not clear enough]
 
 What to inspect next:
 [specific checks in order]
@@ -141,11 +163,11 @@ async function requestAudioDiagnosis({ prompt, audioBase64, audioFormat }) {
   try {
     const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
-     headers: {
-  "Content-Type": "application/json",
-  Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-  "OpenAI-Beta": "audio",
-     },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "OpenAI-Beta": "audio",
+      },
       body: JSON.stringify({
         model: process.env.DRIVESHIFT_AUDIO_MODEL || "gpt-4o-audio-preview",
         input: [
@@ -160,26 +182,37 @@ async function requestAudioDiagnosis({ prompt, audioBase64, audioFormat }) {
                 type: "input_audio",
                 input_audio: {
                   data: audioBase64,
-                  format: audioFormat || "m4a",
+                  format: audioFormat,
                 },
               },
             ],
           },
         ],
-        temperature: 0.08,
-        max_output_tokens: 950,
+        temperature: 0.04,
+        max_output_tokens: 1000,
       }),
     });
 
-    if (!response.ok) {
-      return "";
-    }
+    if (!response.ok) return "";
 
     const data = await response.json();
     return extractText(data);
   } catch (_) {
     return "";
   }
+}
+
+function normalizeAudioFormat(format) {
+  const f = String(format || "").toLowerCase().trim();
+
+  if (f.includes("wav")) return "wav";
+  if (f.includes("mp3")) return "mp3";
+  if (f.includes("webm")) return "webm";
+  if (f.includes("mp4")) return "mp4";
+  if (f.includes("m4a")) return "m4a";
+  if (f.includes("aac")) return "m4a";
+
+  return "m4a";
 }
 
 function extractText(data) {
@@ -208,68 +241,68 @@ function buildAudioFallbackReport({
   vehicleProfile,
 }) {
   const isEs = lang === "es";
-  const vehicleText = buildVehicleText(vehicleProfile);
+  const duration = Number(durationSeconds || 0);
 
   if (isEs) {
     return `Diagnosis status: analysis
 
 Voice summary:
-DriveShift recibió la grabación, pero necesita una grabación más clara para una lectura más precisa.
+DriveShift recibió la grabación, pero el sonido no fue lo bastante claro para identificar una sola causa.
 
 Risk level:
 Medium
 
 Likely issue:
-Most likely: Sonido anormal del vehículo que requiere confirmación con una grabación más clara
-Secondary possibility: Problema de motor, banda, polea, escape, arranque o vibración
-Less likely: Causa secundaria hasta que haya más evidencia
+Most likely: Sonido anormal que necesita una grabación más clara cerca de la fuente
+Secondary possibility: Ruido de motor, banda, polea, escape, arranque, freno, rueda o vibración
+Less likely: Causa interna severa hasta que el sonido sea más claro o aparezcan síntomas fuertes
 
 Why it fits:
-La grabación o el patrón seleccionado no fue suficiente para confirmar una sola causa. El análisis debe combinar el sonido con síntomas, códigos OBD o inspección visual.
+La grabación de ${duration} segundos no dio una señal suficientemente fuerte para separar con seguridad entre ruido de motor, banda, polea, escape, arranque o vibración. El audio debe combinarse con síntomas, códigos OBD o inspección visual.
 
 What to inspect next:
-Graba nuevamente cerca de la fuente del sonido. Revisa si el ruido cambia al acelerar, en idle, al arrancar, al frenar o al girar.
+Graba otra vez de 7 a 10 segundos cerca de la fuente del sonido. Haz una grabación en idle, otra al acelerar suavemente, y otra cerca del área donde se escucha más fuerte.
 
 What to do next:
-Haz otra grabación corta de 5 a 10 segundos en un lugar con poco ruido.
+Intenta grabar en un lugar tranquilo. No hables durante la grabación. Mantén el teléfono estable y cerca del motor, rueda, banda o zona del ruido.
 
 Answer options:
 None
 
 When to stop driving:
-Deja de manejar si el sonido se vuelve fuerte, aparece pérdida de potencia, olor a quemado, humo, sobrecalentamiento o una luz roja.`;
+Deja de manejar si el sonido se vuelve fuerte, aparece pérdida de potencia, olor a quemado, humo, sobrecalentamiento, grinding fuerte, o una luz roja.`;
   }
 
   return `Diagnosis status: analysis
 
 Voice summary:
-DriveShift received the recording, but a clearer recording would improve the sound diagnosis.
+DriveShift received the recording, but the sound was not clear enough to identify one confident cause.
 
 Risk level:
 Medium
 
 Likely issue:
-Most likely: Abnormal vehicle sound requiring confirmation with clearer audio
-Secondary possibility: Engine, belt, pulley, exhaust, starter, or vibration-related issue
-Less likely: Secondary cause until stronger evidence appears
+Most likely: Abnormal sound that needs a clearer recording near the source
+Secondary possibility: Engine, belt, pulley, exhaust, starter, brake, wheel, or vibration-related noise
+Less likely: Severe internal failure unless the sound becomes louder, rhythmic, or comes with strong symptoms
 
 Why it fits:
-The recording or selected sound pattern was not strong enough to confirm one exact cause. Audio diagnosis should be combined with symptoms, OBD codes, or visual inspection.
+The ${duration} second recording did not provide a strong enough sound pattern to safely separate engine, belt, pulley, exhaust, starter, brake, wheel, or vibration noise. Audio diagnosis should be combined with symptoms, OBD codes, or visual inspection.
 
 What to inspect next:
-Record again closer to the sound source. Note whether the sound changes during idle, acceleration, startup, braking, or turning.
+Record again for 7 to 10 seconds close to the sound source. Try one recording at idle, one during light revving, and one near the area where the sound is loudest.
 
 What to do next:
-Try another short 5 to 10 second recording in a quiet area.
+Record in a quiet area. Do not speak during the recording. Hold the phone steady and close to the engine, wheel, belt area, or source of the noise.
 
 Answer options:
 None
 
 When to stop driving:
-Stop driving if the sound becomes severe, power drops, you smell burning, see smoke, the engine overheats, or a red warning light appears.`;
+Stop driving if the sound becomes severe, power drops, you smell burning, see smoke, the engine overheats, you hear heavy grinding, or a red warning light appears.`;
 }
 
-function cleanAndFinalize(text, lang) {
+function cleanAndFinalize(text) {
   let clean = String(text || "").trim();
 
   clean = clean.replace(/Confidence:\s*[\s\S]*?(?=Risk level:)/i, "");
@@ -292,7 +325,13 @@ function cleanAndFinalize(text, lang) {
     clean += "\n\nAnswer options:\nNone";
   }
 
-  return clean.trim();
+  clean = clean
+    .replace(/\*\*/g, "")
+    .replace(/`/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  return clean;
 }
 
 function buildVehicleText(profile) {
