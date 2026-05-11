@@ -858,6 +858,10 @@ Less likely: ${audioIntelligence.lessLikely}
 Why it fits:
 The ${duration} second recording did not confirm one exact part, but it is enough to start with the dominant sound family using the audio signal pattern.
 
+Debug signal:
+Most likely: ${audioIntelligence.mostLikely}
+Hints: ${audioIntelligence.hints.join(", ")}
+
 What to inspect next:
 Start with the area where the sound is loudest. Compare whether it changes at idle, with light revving, startup, A/C load, steering load, braking, or movement.
 
