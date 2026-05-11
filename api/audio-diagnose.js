@@ -545,7 +545,115 @@ function buildAudioIntelligence({
       "audio received but exact family is unclear"
     );
   }
+// ===============================
+// DriveShift Audio Signature Engine
+// ===============================
 
+if (
+  signal.lowRatio > 0.65 &&
+  signal.peak > 0.65 &&
+  signal.pulseRate >= 0.5 &&
+  signal.pulseRate <= 4
+) {
+  add(
+    "rod_knock_or_heavy_knock",
+    "Rod knock, deep internal knock, heavy engine vibration, or rotating mechanical impact",
+    70,
+    "low-frequency energy with strong impact peaks and slow pulse behavior"
+  );
+}
+
+if (
+  signal.midHighRatio > 0.55 &&
+  signal.pulseRate >= 4 &&
+  signal.pulseRate <= 18
+) {
+  add(
+    "injector_tick_or_lifter_tap",
+    "Injector tick, lifter tapping, valve train tick, or small exhaust tick",
+    62,
+    "rhythmic mid/high pulse pattern suggests ticking or tapping"
+  );
+}
+
+if (
+  signal.highRatio > 0.35 &&
+  signal.zcr > 0.12 &&
+  signal.pulseRate < 3
+) {
+  add(
+    "belt_chirp_or_squeal",
+    "Belt chirp, belt squeal, weak tensioner, pulley bearing, or accessory belt slip",
+    64,
+    "high-frequency energy with sharp texture fits chirp or squeal"
+  );
+}
+
+if (
+  signal.lowRatio > 0.45 &&
+  signal.zcr < 0.18 &&
+  signal.pulseRate < 2
+) {
+  add(
+    "rotational_hum_or_wheel_bearing",
+    "Wheel bearing growl, rotational hum, tire noise, or drivetrain bearing noise",
+    58,
+    "low steady energy with low pulse behavior fits rotational hum"
+  );
+}
+
+if (
+  signal.midHighRatio > 0.45 &&
+  signal.peak > 0.55 &&
+  signal.zcr > 0.18
+) {
+  add(
+    "brake_grind_or_metal_contact",
+    "Brake grind, dust shield contact, rotor/pad contact, or metallic scraping",
+    60,
+    "sharp mid/high energy with strong peaks fits grinding or metal contact"
+  );
+}
+
+if (
+  signal.zcr > 0.20 &&
+  signal.highRatio > 0.22 &&
+  signal.pulseRate < 5
+) {
+  add(
+    "exhaust_or_air_leak_puff",
+    "Exhaust leak puff, vacuum leak, intake leak, or pressure leak",
+    54,
+    "noisy high-frequency texture can fit air leak or exhaust leak"
+  );
+}
+
+if (
+  signal.peak > 0.75 &&
+  signal.midHighRatio > 0.35 &&
+  signal.pulseRate >= 2
+) {
+  add(
+    "metallic_rattle_or_loose_component",
+    "Metallic rattle, loose heat shield, loose bracket, pulley rattle, or timing chain rattle",
+    57,
+    "sharp peaks with rhythmic mid/high energy fit metallic rattle"
+  );
+}
+
+if (
+  duration <= 12 &&
+  signal.lowRatio > 0.55 &&
+  signal.peak > 0.55
+) {
+  add(
+    "cold_start_slap_or_startup_knock",
+    "Cold start slap, startup knock, engine mount movement, or early-start mechanical noise",
+    46,
+    "short recording with low-frequency impact may fit startup slap or knock"
+  );
+}
+  
   ranked.sort((a, b) => b.score - a.score);
   const metricsText = signal?.available
   ? `rms=${signal.rms}, peak=${signal.peak}, zcr=${signal.zcr}, pulseRate=${signal.pulseRate}, lowRatio=${signal.lowRatio}, highRatio=${signal.highRatio}`
