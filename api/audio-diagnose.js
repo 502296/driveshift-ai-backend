@@ -11,6 +11,7 @@ export default async function handler(req, res) {
       selectedSoundPattern,
       durationSeconds,
       vehicleProfile,
+      audioFollowUpAnswers,
     } = req.body;
 
     const lang = language === "es" ? "es" : "en";
@@ -33,13 +34,24 @@ export default async function handler(req, res) {
       signal,
     });
 
-    const followUp = buildAudioFollowUpQuestion(audioIntelligence);
-
     if (!audio || audioSize < 1000) {
       return res.status(200).json({
         result: buildAudioFallbackReport({
           lang,
           durationSeconds: duration,
+          audioIntelligence,
+        }),
+      });
+    }
+
+    const answers = Array.isArray(audioFollowUpAnswers)
+      ? audioFollowUpAnswers
+      : [];
+
+    if (answers.length < 3) {
+      return res.status(200).json({
+        result: buildAudioFollowUpBlock({
+          lang,
           audioIntelligence,
         }),
       });
@@ -52,7 +64,7 @@ export default async function handler(req, res) {
       vehicleProfile,
       audioIntelligence,
       signal,
-      followUp,
+      audioFollowUpAnswers: answers,
     });
 
     const aiText = await requestAudioDiagnosis({
@@ -78,7 +90,7 @@ export default async function handler(req, res) {
     });
 
     return res.status(200).json({ result });
-  } catch (error) {
+  } catch (_) {
     const lang = req.body?.language === "es" ? "es" : "en";
 
     return res.status(200).json({
@@ -98,26 +110,144 @@ export default async function handler(req, res) {
   }
 }
 
+function buildAudioFollowUpBlock({ lang, audioIntelligence }) {
+  const isEs = lang === "es";
+  const primary = String(audioIntelligence?.mostLikely || "").toLowerCase();
+
+  let q1;
+  let q2;
+  let q3;
+
+  if (
+    primary.includes("brake") ||
+    primary.includes("scrape") ||
+    primary.includes("wheel") ||
+    primary.includes("rotational")
+  ) {
+    q1 = {
+      question: isEs
+        ? "¿El sonido cambia con la velocidad del vehículo o al frenar?"
+        : "Does the sound change with vehicle speed or braking?",
+      options: isEs
+        ? ["Cambia con velocidad", "Cambia al frenar", "Solo al girar", "No cambia"]
+        : ["Changes with speed", "Changes while braking", "Only while turning", "No change"],
+    };
+
+    q2 = {
+      question: isEs
+        ? "¿Dónde se escucha más fuerte?"
+        : "Where does the sound seem strongest?",
+      options: isEs
+        ? ["Rueda delantera", "Rueda trasera", "Centro del carro", "No estoy seguro"]
+        : ["Front wheel area", "Rear wheel area", "Under the car", "Not sure"],
+    };
+
+    q3 = {
+      question: isEs
+        ? "¿El sonido parece roce, zumbido, golpe o chirrido?"
+        : "Is the sound more like scraping, humming, knocking, or squealing?",
+      options: isEs
+        ? ["Roce metálico", "Zumbido", "Golpe", "Chirrido"]
+        : ["Metal scraping", "Humming/growling", "Knocking", "Squealing"],
+    };
+  } else if (
+    primary.includes("belt") ||
+    primary.includes("chirp") ||
+    primary.includes("squeal")
+  ) {
+    q1 = {
+      question: isEs ? "¿Cuándo se escucha más fuerte?" : "When is the sound strongest?",
+      options: isEs
+        ? ["Arranque en frío", "Con A/C encendido", "Al acelerar", "Todo el tiempo"]
+        : ["Cold startup", "A/C turned on", "During acceleration", "All the time"],
+    };
+
+    q2 = {
+      question: isEs
+        ? "¿El sonido cambia si giras el volante o enciendes accesorios?"
+        : "Does it change with steering load or accessories?",
+      options: isEs
+        ? ["Cambia al girar", "Cambia con A/C", "No cambia", "No sé"]
+        : ["Changes while steering", "Changes with A/C", "No change", "Not sure"],
+    };
+
+    q3 = {
+      question: isEs
+        ? "¿El sonido desaparece después من calentarse?"
+        : "Does the sound fade after the engine warms up?",
+      options: isEs
+        ? ["Sí desaparece", "Baja un poco", "Sigue igual", "Empeora"]
+        : ["Yes, it fades", "Gets a little quieter", "Stays the same", "Gets worse"],
+    };
+  } else {
+    q1 = {
+      question: isEs
+        ? "¿El sonido se vuelve más rápido o más fuerte cuando sube el RPM?"
+        : "Does the sound become faster or louder when engine RPM increases?",
+      options: isEs
+        ? ["Sí, claramente con RPM", "Solo en frío", "Más en idle", "No cambia"]
+        : ["Yes, clearly with RPM", "Only during cold start", "Mostly at idle", "No noticeable change"],
+    };
+
+    q2 = {
+      question: isEs ? "¿Cuándo aparece más?" : "When does it happen most?",
+      options: isEs
+        ? ["Arranque en frío", "Después de calentarse", "Acelerando", "En idle"]
+        : ["Cold startup", "After warm-up", "While accelerating", "At idle"],
+    };
+
+    q3 = {
+      question: isEs ? "¿Dónde se escucha más fuerte?" : "Where does it sound strongest?",
+      options: isEs
+        ? ["Motor arriba", "Parte baja del motor", "Área de banda/polea", "No sé"]
+        : ["Top of engine", "Lower engine area", "Belt/pulley area", "Not sure"],
+    };
+  }
+
+  return `Diagnosis status: audio_follow_up
+
+Voice summary:
+${
+  isEs
+    ? "DriveShift escuchó el sonido y necesita tres datos rápidos antes del reporte final."
+    : "DriveShift heard the sound and needs three quick details before the final report."
+}
+
+Audio direction:
+${audioIntelligence.mostLikely}
+
+Question 1:
+${q1.question}
+
+Answer options 1:
+${q1.options.join("\n")}
+
+Question 2:
+${q2.question}
+
+Answer options 2:
+${q2.options.join("\n")}
+
+Question 3:
+${q3.question}
+
+Answer options 3:
+${q3.options.join("\n")}`;
+}
+
 function analyzeAudioSignal({ audioBase64, audioFormat, durationSeconds }) {
   try {
     if (!audioBase64 || normalizeAudioFormat(audioFormat) !== "wav") {
-      return {
-        available: false,
-        reason: "Signal analysis skipped because audio is not WAV.",
-      };
+      return { available: false, reason: "Signal analysis skipped because audio is not WAV." };
     }
 
     const decoded = decodeWavPcm16(audioBase64);
     if (!decoded || !decoded.samples?.length) {
-      return {
-        available: false,
-        reason: "Could not decode WAV PCM samples.",
-      };
+      return { available: false, reason: "Could not decode WAV PCM samples." };
     }
 
     const { samples, sampleRate } = decoded;
     const duration = Number(durationSeconds || samples.length / sampleRate || 0);
-
     const maxSamples = Math.min(samples.length, sampleRate * 12);
     const segment = samples.slice(0, maxSamples);
 
@@ -138,7 +268,6 @@ function analyzeAudioSignal({ audioBase64, audioFormat, durationSeconds }) {
 
     const rms = Math.sqrt(sumSq / Math.max(1, segment.length));
     const zcr = zeroCrossings / Math.max(1, segment.length);
-
     const envelope = buildEnvelope(segment, sampleRate);
     const pulse = analyzePulseEnvelope(envelope, duration);
     const spectral = analyzeSpectralBands(segment, sampleRate);
@@ -220,10 +349,7 @@ function analyzeAudioSignal({ audioBase64, audioFormat, durationSeconds }) {
       evidence,
     };
   } catch (_) {
-    return {
-      available: false,
-      reason: "Signal analysis failed safely.",
-    };
+    return { available: false, reason: "Signal analysis failed safely." };
   }
 }
 
@@ -410,6 +536,7 @@ function buildAudioIntelligence({
 
   const add = (key, label, score, evidence) => {
     const existing = ranked.find((x) => x.key === key);
+
     if (existing) {
       existing.score += score;
       existing.evidence.push(evidence);
@@ -434,9 +561,7 @@ function buildAudioIntelligence({
     hints.push(...signal.hints);
 
     if (signal.advancedProfile) {
-      hints.push(
-        `Advanced acoustic profile: ${JSON.stringify(signal.advancedProfile)}`
-      );
+      hints.push(`Advanced acoustic profile: ${JSON.stringify(signal.advancedProfile)}`);
     }
 
     if (Array.isArray(signal.advancedSignatures)) {
@@ -715,63 +840,6 @@ function buildAudioIntelligence({
   };
 }
 
-function buildAudioFollowUpQuestion(audioIntelligence) {
-  const primary = String(audioIntelligence?.mostLikely || "").toLowerCase();
-
-  if (
-    primary.includes("rod knock") ||
-    primary.includes("lifter") ||
-    primary.includes("injector") ||
-    primary.includes("valve train")
-  ) {
-    return {
-      question:
-        "Does the sound become faster or louder when engine RPM increases?",
-      options: [
-        "Yes, clearly with RPM",
-        "Only during cold start",
-        "Mostly at idle",
-        "No noticeable change",
-      ],
-    };
-  }
-
-  if (
-    primary.includes("wheel bearing") ||
-    primary.includes("rotational") ||
-    primary.includes("brake") ||
-    primary.includes("scrape")
-  ) {
-    return {
-      question: "Does the sound change with vehicle speed or braking?",
-      options: [
-        "Changes with speed",
-        "Changes while braking",
-        "Only during acceleration",
-        "No change",
-      ],
-    };
-  }
-
-  if (
-    primary.includes("belt") ||
-    primary.includes("chirp") ||
-    primary.includes("squeal")
-  ) {
-    return {
-      question: "When is the sound strongest?",
-      options: [
-        "Cold startup",
-        "Wet weather",
-        "Hard acceleration",
-        "Constant all the time",
-      ],
-    };
-  }
-
-  return null;
-}
-
 function buildAudioPrompt({
   lang,
   selectedSoundPattern,
@@ -779,17 +847,28 @@ function buildAudioPrompt({
   vehicleProfile,
   audioIntelligence,
   signal,
-  followUp,
+  audioFollowUpAnswers,
 }) {
   const isEs = lang === "es";
   const vehicleText = buildVehicleText(vehicleProfile);
   const duration = Number(durationSeconds || 0);
 
+  const followUpText =
+    Array.isArray(audioFollowUpAnswers) && audioFollowUpAnswers.length
+      ? audioFollowUpAnswers
+          .map((item, index) => {
+            const q = String(item?.question || `Question ${index + 1}`).trim();
+            const a = String(item?.answer || "").trim();
+            return `${index + 1}. ${q}: ${a}`;
+          })
+          .join("\n")
+      : "No follow-up answers.";
+
   return `
 You are DriveShift Doctor, a premium automotive diagnostic intelligence.
 
-You are analyzing a real vehicle audio recording plus local WAV signal metrics.
-Think like a senior mechanic listening to a car sound.
+You are analyzing a real vehicle audio recording plus local WAV signal metrics and the user's follow-up answers.
+Think like a senior mechanic listening to a car sound and narrowing it down through behavior.
 
 Language:
 ${isEs ? "Spanish only" : "English only"}
@@ -811,8 +890,8 @@ Most likely direction: ${audioIntelligence.mostLikely}
 Secondary direction: ${audioIntelligence.secondary}
 Less likely direction: ${audioIntelligence.lessLikely}
 
-Mechanic clarification that would improve certainty:
-${followUp ? `${followUp.question} Options: ${followUp.options.join(" / ")}` : "No extra clarification needed."}
+User follow-up answers:
+${followUpText}
 
 Audio hints:
 ${audioIntelligence.hints.join("\n")}
@@ -832,15 +911,14 @@ ${audioIntelligence.ranked
   .join("\n")}
 
 Important reasoning:
-- Use the local WAV signal metrics as diagnostic clues, not absolute proof.
-- Do not hide behind "unclear" unless the signal is truly unusable.
-- Even if confidence is limited, give the strongest diagnostic direction.
-- If low-frequency energy dominates, consider knock, heavy vibration, engine mount, rotational load, or deep mechanical sound.
-- If rhythmic mid/high pulses appear, consider ticking, tapping, injector tick, valvetrain, exhaust tick, pulley rattle, or metallic rattle.
-- If high-frequency energy and high zero-crossing appear, consider belt squeal, hissing, sharp metal contact, or air/exhaust leak.
-- If pulse rate is regular, explain why rhythm matters.
-- If the clarification question would help, mention it briefly in What to inspect next, but do not ask a separate follow-up question.
+- Use the audio signal metrics and follow-up answers together.
+- If the user says the sound follows RPM, raise engine/ticking/knock families above wheel/brake families.
+- If the user says the sound changes with vehicle speed, raise wheel bearing/rotational/brake families.
+- If the user says the sound changes while braking, raise brake scrape/rotor/pad/dust shield.
+- If the user says it is cold-start only, raise belt chirp, startup knock, lifter bleed-down, or cold start slap.
+- If the user says it is strongest at idle/top of engine, raise injector tick/lifter/valvetrain/exhaust tick.
 - Do not recommend replacing parts immediately unless evidence is strong.
+- Explain WHY like a mechanic, not like a generic AI.
 
 Output exactly this format:
 
@@ -858,7 +936,7 @@ Secondary possibility: [second cause]
 Less likely: [third cause or less likely unless new evidence appears]
 
 Why it fits:
-[explain why the sound and signal metrics point there]
+[explain why the sound, signal metrics, and follow-up answers point there]
 
 What to inspect next:
 [specific checks in order]
