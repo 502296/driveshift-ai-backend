@@ -33,6 +33,8 @@ export default async function handler(req, res) {
       signal,
     });
 
+    const followUp = buildAudioFollowUpQuestion(audioIntelligence);
+
     if (!audio || audioSize < 1000) {
       return res.status(200).json({
         result: buildAudioFallbackReport({
@@ -50,6 +52,7 @@ export default async function handler(req, res) {
       vehicleProfile,
       audioIntelligence,
       signal,
+      followUp,
     });
 
     const aiText = await requestAudioDiagnosis({
@@ -138,7 +141,6 @@ function analyzeAudioSignal({ audioBase64, audioFormat, durationSeconds }) {
 
     const envelope = buildEnvelope(segment, sampleRate);
     const pulse = analyzePulseEnvelope(envelope, duration);
-
     const spectral = analyzeSpectralBands(segment, sampleRate);
 
     const hints = [];
@@ -184,18 +186,19 @@ function analyzeAudioSignal({ audioBase64, audioFormat, durationSeconds }) {
       hints.push("hissing_air_noise_possible");
       evidence.push("Noisy high-frequency texture may fit hissing, air leak, or exhaust leak.");
     }
+
     const advanced = buildAdvancedAcousticProfile({
-  signalHints: hints,
-  rms,
-  peak,
-  zcr,
-  pulseRate: pulse.pulseRate,
-  pulseRegularity: pulse.regularity,
-  lowRatio: spectral.lowRatio,
-  midRatio: spectral.midRatio,
-  highRatio: spectral.highRatio,
-  midHighRatio: spectral.midHighRatio,
-});
+      signalHints: hints,
+      rms,
+      peak,
+      zcr,
+      pulseRate: pulse.pulseRate,
+      pulseRegularity: pulse.regularity,
+      lowRatio: spectral.lowRatio,
+      midRatio: spectral.midRatio,
+      highRatio: spectral.highRatio,
+      midHighRatio: spectral.midHighRatio,
+    });
 
     return {
       available: true,
@@ -265,16 +268,15 @@ function decodeWavPcm16(audioBase64) {
   }
 
   const samples = [];
-  const bytesPerSample = 2;
-  const frameSize = channels * bytesPerSample;
+  const frameSize = channels * 2;
   const frames = Math.floor(dataSize / frameSize);
 
   for (let i = 0; i < frames; i++) {
     const frameOffset = dataOffset + i * frameSize;
-
     let mixed = 0;
+
     for (let ch = 0; ch < channels; ch++) {
-      const sample = buffer.readInt16LE(frameOffset + ch * bytesPerSample);
+      const sample = buffer.readInt16LE(frameOffset + ch * 2);
       mixed += sample / 32768;
     }
 
@@ -430,22 +432,19 @@ function buildAudioIntelligence({
 
   if (signal?.available) {
     hints.push(...signal.hints);
-    if (signal.advancedProfile) {
-  hints.push(
-    `Advanced acoustic profile: ${JSON.stringify(signal.advancedProfile)}`
-  );
-}
 
-if (Array.isArray(signal.advancedSignatures)) {
-  for (const sig of signal.advancedSignatures.slice(0, 3)) {
-    add(
-      sig.key,
-      sig.label,
-      sig.confidence,
-      sig.why
-    );
-  }
-}
+    if (signal.advancedProfile) {
+      hints.push(
+        `Advanced acoustic profile: ${JSON.stringify(signal.advancedProfile)}`
+      );
+    }
+
+    if (Array.isArray(signal.advancedSignatures)) {
+      for (const sig of signal.advancedSignatures.slice(0, 3)) {
+        add(sig.key, sig.label, sig.confidence, sig.why);
+      }
+    }
+
     hints.push(
       `Signal metrics: rms=${signal.rms}, peak=${signal.peak}, zcr=${signal.zcr}, pulseRate=${signal.pulseRate}, lowRatio=${signal.lowRatio}, highRatio=${signal.highRatio}`
     );
@@ -483,6 +482,111 @@ if (Array.isArray(signal.advancedSignatures)) {
         "Vacuum leak, intake leak, exhaust leak, boost leak, or pressure leak",
         34,
         "WAV signal has noisy high-frequency texture"
+      );
+    }
+
+    if (
+      signal.lowRatio > 0.65 &&
+      signal.peak > 0.65 &&
+      signal.pulseRate >= 0.5 &&
+      signal.pulseRate <= 4
+    ) {
+      add(
+        "rod_knock_or_heavy_knock",
+        "Rod knock, deep internal knock, heavy engine vibration, or rotating mechanical impact",
+        70,
+        "low-frequency energy with strong impact peaks and slow pulse behavior"
+      );
+    }
+
+    if (
+      signal.midHighRatio > 0.55 &&
+      signal.pulseRate >= 4 &&
+      signal.pulseRate <= 18
+    ) {
+      add(
+        "injector_tick_or_lifter_tap",
+        "Injector tick, lifter tapping, valve train tick, or small exhaust tick",
+        62,
+        "rhythmic mid/high pulse pattern suggests ticking or tapping"
+      );
+    }
+
+    if (
+      signal.highRatio > 0.35 &&
+      signal.zcr > 0.12 &&
+      signal.pulseRate < 3
+    ) {
+      add(
+        "belt_chirp_or_squeal",
+        "Belt chirp, belt squeal, weak tensioner, pulley bearing, or accessory belt slip",
+        64,
+        "high-frequency energy with sharp texture fits chirp or squeal"
+      );
+    }
+
+    if (
+      signal.lowRatio > 0.45 &&
+      signal.zcr < 0.18 &&
+      signal.pulseRate < 2
+    ) {
+      add(
+        "rotational_hum_or_wheel_bearing",
+        "Wheel bearing growl, rotational hum, tire noise, or drivetrain bearing noise",
+        58,
+        "low steady energy with low pulse behavior fits rotational hum"
+      );
+    }
+
+    if (
+      signal.midHighRatio > 0.45 &&
+      signal.peak > 0.55 &&
+      signal.zcr > 0.18
+    ) {
+      add(
+        "brake_grind_or_metal_contact",
+        "Brake grind, dust shield contact, rotor/pad contact, or metallic scraping",
+        60,
+        "sharp mid/high energy with strong peaks fits grinding or metal contact"
+      );
+    }
+
+    if (
+      signal.zcr > 0.20 &&
+      signal.highRatio > 0.22 &&
+      signal.pulseRate < 5
+    ) {
+      add(
+        "exhaust_or_air_leak_puff",
+        "Exhaust leak puff, vacuum leak, intake leak, or pressure leak",
+        54,
+        "noisy high-frequency texture can fit air leak or exhaust leak"
+      );
+    }
+
+    if (
+      signal.peak > 0.75 &&
+      signal.midHighRatio > 0.35 &&
+      signal.pulseRate >= 2
+    ) {
+      add(
+        "metallic_rattle_or_loose_component",
+        "Metallic rattle, loose heat shield, loose bracket, pulley rattle, or timing chain rattle",
+        57,
+        "sharp peaks with rhythmic mid/high energy fit metallic rattle"
+      );
+    }
+
+    if (
+      duration <= 12 &&
+      signal.lowRatio > 0.55 &&
+      signal.peak > 0.55
+    ) {
+      add(
+        "cold_start_slap_or_startup_knock",
+        "Cold start slap, startup knock, engine mount movement, or early-start mechanical noise",
+        46,
+        "short recording with low-frequency impact may fit startup slap or knock"
       );
     }
   } else {
@@ -575,139 +679,32 @@ if (Array.isArray(signal.advancedSignatures)) {
       "audio received but exact family is unclear"
     );
   }
-// ===============================
-// DriveShift Audio Signature Engine
-// ===============================
 
-if (
-  signal.lowRatio > 0.65 &&
-  signal.peak > 0.65 &&
-  signal.pulseRate >= 0.5 &&
-  signal.pulseRate <= 4
-) {
-  add(
-    "rod_knock_or_heavy_knock",
-    "Rod knock, deep internal knock, heavy engine vibration, or rotating mechanical impact",
-    70,
-    "low-frequency energy with strong impact peaks and slow pulse behavior"
-  );
-}
-
-if (
-  signal.midHighRatio > 0.55 &&
-  signal.pulseRate >= 4 &&
-  signal.pulseRate <= 18
-) {
-  add(
-    "injector_tick_or_lifter_tap",
-    "Injector tick, lifter tapping, valve train tick, or small exhaust tick",
-    62,
-    "rhythmic mid/high pulse pattern suggests ticking or tapping"
-  );
-}
-
-if (
-  signal.highRatio > 0.35 &&
-  signal.zcr > 0.12 &&
-  signal.pulseRate < 3
-) {
-  add(
-    "belt_chirp_or_squeal",
-    "Belt chirp, belt squeal, weak tensioner, pulley bearing, or accessory belt slip",
-    64,
-    "high-frequency energy with sharp texture fits chirp or squeal"
-  );
-}
-
-if (
-  signal.lowRatio > 0.45 &&
-  signal.zcr < 0.18 &&
-  signal.pulseRate < 2
-) {
-  add(
-    "rotational_hum_or_wheel_bearing",
-    "Wheel bearing growl, rotational hum, tire noise, or drivetrain bearing noise",
-    58,
-    "low steady energy with low pulse behavior fits rotational hum"
-  );
-}
-
-if (
-  signal.midHighRatio > 0.45 &&
-  signal.peak > 0.55 &&
-  signal.zcr > 0.18
-) {
-  add(
-    "brake_grind_or_metal_contact",
-    "Brake grind, dust shield contact, rotor/pad contact, or metallic scraping",
-    60,
-    "sharp mid/high energy with strong peaks fits grinding or metal contact"
-  );
-}
-
-if (
-  signal.zcr > 0.20 &&
-  signal.highRatio > 0.22 &&
-  signal.pulseRate < 5
-) {
-  add(
-    "exhaust_or_air_leak_puff",
-    "Exhaust leak puff, vacuum leak, intake leak, or pressure leak",
-    54,
-    "noisy high-frequency texture can fit air leak or exhaust leak"
-  );
-}
-
-if (
-  signal.peak > 0.75 &&
-  signal.midHighRatio > 0.35 &&
-  signal.pulseRate >= 2
-) {
-  add(
-    "metallic_rattle_or_loose_component",
-    "Metallic rattle, loose heat shield, loose bracket, pulley rattle, or timing chain rattle",
-    57,
-    "sharp peaks with rhythmic mid/high energy fit metallic rattle"
-  );
-}
-
-if (
-  duration <= 12 &&
-  signal.lowRatio > 0.55 &&
-  signal.peak > 0.55
-) {
-  add(
-    "cold_start_slap_or_startup_knock",
-    "Cold start slap, startup knock, engine mount movement, or early-start mechanical noise",
-    46,
-    "short recording with low-frequency impact may fit startup slap or knock"
-  );
-}
-  
   ranked.sort((a, b) => b.score - a.score);
+
   const metricsText = signal?.available
-  ? `rms=${signal.rms}, peak=${signal.peak}, zcr=${signal.zcr}, pulseRate=${signal.pulseRate}, lowRatio=${signal.lowRatio}, highRatio=${signal.highRatio}`
-  : "No signal metrics";
+    ? `rms=${signal.rms}, peak=${signal.peak}, zcr=${signal.zcr}, pulseRate=${signal.pulseRate}, lowRatio=${signal.lowRatio}, highRatio=${signal.highRatio}`
+    : "No signal metrics";
 
-let signalClassification = "balanced_signal";
+  let signalClassification = "balanced_signal";
 
-if (signal?.lowRatio > 0.7) {
-  signalClassification = "low_frequency_mechanical_pattern";
-}
+  if (signal?.lowRatio > 0.7) {
+    signalClassification = "low_frequency_mechanical_pattern";
+  }
 
-if (signal?.peak > 0.78) {
-  signalClassification += ", strong_impact_or_knock_energy";
-}
+  if (signal?.peak > 0.78) {
+    signalClassification += ", strong_impact_or_knock_energy";
+  }
 
-if (signal?.zcr < 0.12) {
-  signalClassification += ", deep_rotational_pattern";
-}
+  if (signal?.zcr < 0.12) {
+    signalClassification += ", deep_rotational_pattern";
+  }
 
   return {
     hints,
     ranked,
     metricsText,
-  signalClassification,
+    signalClassification,
     mostLikely: ranked[0]?.label || "Abnormal vehicle sound",
     secondary:
       ranked[1]?.label ||
@@ -718,6 +715,63 @@ if (signal?.zcr < 0.12) {
   };
 }
 
+function buildAudioFollowUpQuestion(audioIntelligence) {
+  const primary = String(audioIntelligence?.mostLikely || "").toLowerCase();
+
+  if (
+    primary.includes("rod knock") ||
+    primary.includes("lifter") ||
+    primary.includes("injector") ||
+    primary.includes("valve train")
+  ) {
+    return {
+      question:
+        "Does the sound become faster or louder when engine RPM increases?",
+      options: [
+        "Yes, clearly with RPM",
+        "Only during cold start",
+        "Mostly at idle",
+        "No noticeable change",
+      ],
+    };
+  }
+
+  if (
+    primary.includes("wheel bearing") ||
+    primary.includes("rotational") ||
+    primary.includes("brake") ||
+    primary.includes("scrape")
+  ) {
+    return {
+      question: "Does the sound change with vehicle speed or braking?",
+      options: [
+        "Changes with speed",
+        "Changes while braking",
+        "Only during acceleration",
+        "No change",
+      ],
+    };
+  }
+
+  if (
+    primary.includes("belt") ||
+    primary.includes("chirp") ||
+    primary.includes("squeal")
+  ) {
+    return {
+      question: "When is the sound strongest?",
+      options: [
+        "Cold startup",
+        "Wet weather",
+        "Hard acceleration",
+        "Constant all the time",
+      ],
+    };
+  }
+
+  return null;
+}
+
 function buildAudioPrompt({
   lang,
   selectedSoundPattern,
@@ -725,6 +779,7 @@ function buildAudioPrompt({
   vehicleProfile,
   audioIntelligence,
   signal,
+  followUp,
 }) {
   const isEs = lang === "es";
   const vehicleText = buildVehicleText(vehicleProfile);
@@ -756,8 +811,12 @@ Most likely direction: ${audioIntelligence.mostLikely}
 Secondary direction: ${audioIntelligence.secondary}
 Less likely direction: ${audioIntelligence.lessLikely}
 
+Mechanic clarification that would improve certainty:
+${followUp ? `${followUp.question} Options: ${followUp.options.join(" / ")}` : "No extra clarification needed."}
+
 Audio hints:
 ${audioIntelligence.hints.join("\n")}
+
 Raw audio metrics:
 ${audioIntelligence.metricsText || "No metrics"}
 
@@ -780,6 +839,7 @@ Important reasoning:
 - If rhythmic mid/high pulses appear, consider ticking, tapping, injector tick, valvetrain, exhaust tick, pulley rattle, or metallic rattle.
 - If high-frequency energy and high zero-crossing appear, consider belt squeal, hissing, sharp metal contact, or air/exhaust leak.
 - If pulse rate is regular, explain why rhythm matters.
+- If the clarification question would help, mention it briefly in What to inspect next, but do not ask a separate follow-up question.
 - Do not recommend replacing parts immediately unless evidence is strong.
 
 Output exactly this format:
@@ -1147,10 +1207,6 @@ Less likely: ${audioIntelligence.lessLikely}
 Why it fits:
 The ${duration} second recording did not confirm one exact part, but it is enough to start with the dominant sound family using the audio signal pattern.
 
-Debug signal:
-Most likely: ${audioIntelligence.mostLikely}
-Hints: ${audioIntelligence.hints.join(", ")}
-
 What to inspect next:
 Start with the area where the sound is loudest. Compare whether it changes at idle, with light revving, startup, A/C load, steering load, braking, or movement.
 
@@ -1186,10 +1242,12 @@ function cleanAndFinalize(text) {
   } else {
     clean += "\n\nAnswer options:\nNone";
   }
-clean = clean.replace(
-  /Debug signal:[\s\S]*?(?=\n\s*What to inspect next:|\n\s*What to do next:|\n\s*When to stop driving:|\n\s*Safety:|$)/i,
-  ""
-);
+
+  clean = clean.replace(
+    /Debug signal:[\s\S]*?(?=\n\s*What to inspect next:|\n\s*What to do next:|\n\s*When to stop driving:|\n\s*Safety:|$)/i,
+    ""
+  );
+
   clean = clean
     .replace(/\*\*/g, "")
     .replace(/`/g, "")
