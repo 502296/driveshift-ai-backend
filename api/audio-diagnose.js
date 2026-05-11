@@ -73,21 +73,32 @@ export default async function handler(req, res) {
       audioFormat: normalizedFormat,
     });
 
-    let result =
-      aiText && aiText.trim().length > 40
-        ? cleanAndFinalize(aiText)
-        : buildAudioFallbackReport({
-            lang,
-            durationSeconds: duration,
-            audioIntelligence,
-          });
+   let result;
 
-    result = strengthenWeakAudioReport({
-      result,
-      lang,
-      durationSeconds: duration,
-      audioIntelligence,
-    });
+if (answers && Object.keys(answers).length > 0) {
+  result = buildMechanicFinalReport({
+    lang,
+    audioIntelligence,
+    answers,
+    signal,
+  });
+} else {
+  result =
+    aiText && aiText.trim().length > 40
+      ? cleanAndFinalize(aiText)
+      : buildAudioFallbackReport({
+          lang,
+          durationSeconds: duration,
+          audioIntelligence,
+        });
+
+  result = strengthenWeakAudioReport({
+    result,
+    lang,
+    durationSeconds: duration,
+    audioIntelligence,
+  });
+}
 
     return res.status(200).json({ result });
   } catch (_) {
