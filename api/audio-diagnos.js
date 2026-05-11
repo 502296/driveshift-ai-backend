@@ -141,10 +141,11 @@ async function requestAudioDiagnosis({ prompt, audioBase64, audioFormat }) {
   try {
     const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      },
+     headers: {
+  "Content-Type": "application/json",
+  Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+  "OpenAI-Beta": "audio",
+     },
       body: JSON.stringify({
         model: process.env.DRIVESHIFT_AUDIO_MODEL || "gpt-4o-audio-preview",
         input: [
