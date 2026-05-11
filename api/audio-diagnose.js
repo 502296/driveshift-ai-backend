@@ -921,7 +921,7 @@ function cleanAndFinalize(text) {
   } else {
     clean += "\n\nAnswer options:\nNone";
   }
-
+clean = clean.replace(/Debug signal:[\s\S]*/i, "");
   clean = clean
     .replace(/\*\*/g, "")
     .replace(/`/g, "")
