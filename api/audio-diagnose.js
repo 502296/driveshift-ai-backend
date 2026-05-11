@@ -1005,6 +1005,265 @@ async function requestAudioDiagnosis({ prompt, audioBase64, audioFormat }) {
     return "";
   }
 }
+function buildMechanicFinalReport({
+  lang,
+  audioIntelligence,
+  answers,
+  signal,
+}) {
+  const isEs = lang === "es";
+  const primary = String(audioIntelligence?.mostLikely || "").toLowerCase();
+
+  const answerText = Object.values(answers || {})
+    .join(" ")
+    .toLowerCase();
+
+  const engineBay =
+    answerText.includes("engine") ||
+    answerText.includes("motor");
+
+  const frontWheel =
+    answerText.includes("front") ||
+    answerText.includes("delanter");
+
+  const rearWheel =
+    answerText.includes("rear") ||
+    answerText.includes("traser");
+
+  const underCar =
+    answerText.includes("under") ||
+    answerText.includes("exhaust") ||
+    answerText.includes("debajo") ||
+    answerText.includes("escape");
+
+  const rpmLinked =
+    answerText.includes("rpm") ||
+    answerText.includes("yes, with rpm") ||
+    answerText.includes("sí, con rpm");
+
+  const noChange =
+    answerText.includes("no change") ||
+    answerText.includes("no cambia");
+
+  const braking =
+    answerText.includes("braking") ||
+    answerText.includes("fren");
+
+  const speed =
+    answerText.includes("speed") ||
+    answerText.includes("velocidad");
+
+  const turning =
+    answerText.includes("turning") ||
+    answerText.includes("girar");
+
+  const deepKnock =
+    answerText.includes("deep knock") ||
+    answerText.includes("golpe profundo") ||
+    primary.includes("rod knock") ||
+    primary.includes("deep");
+
+  const fastTick =
+    answerText.includes("fast ticking") ||
+    answerText.includes("tick rápido") ||
+    primary.includes("injector") ||
+    primary.includes("lifter") ||
+    primary.includes("valve");
+
+  const scraping =
+    answerText.includes("metal scraping") ||
+    answerText.includes("roce metálico") ||
+    primary.includes("brake") ||
+    primary.includes("scrape");
+
+  const squeal =
+    answerText.includes("squealing") ||
+    answerText.includes("chirrido") ||
+    primary.includes("belt") ||
+    primary.includes("squeal") ||
+    primary.includes("chirp");
+
+  let risk = "Medium";
+  let most = audioIntelligence?.mostLikely || "Engine-side mechanical noise";
+  let second = audioIntelligence?.secondary || "Belt, pulley, exhaust, brake, wheel, or suspension noise";
+  let less = audioIntelligence?.lessLikely || "Severe internal failure unless the sound becomes louder or metallic";
+
+  let why = "";
+  let inspect = "";
+  let next = "";
+
+  if (engineBay && deepKnock) {
+    risk = "High";
+    most = "Engine-side deep knock or lower mechanical knock";
+    second = "Accessory pulley knock, flexplate noise, engine mount movement, or belt-driven component noise";
+    less = "Wheel bearing or brake noise because the sound was reported from the engine bay";
+
+    why =
+      "The sound was reported from the engine bay and described as a deep knock. That moves the diagnosis away from wheel, brake, and suspension noise and raises engine-side mechanical causes. If the knock becomes faster or louder with RPM, lower-engine knock, accessory pulley impact, flexplate noise, or internal rotating movement becomes more concerning.";
+
+    inspect =
+      "Start at the engine bay. Check oil level first, then listen near the valve cover, accessory belt, pulleys, alternator, tensioner, and lower engine area. Compare the sound at idle and with very light RPM. Do not rev hard if the knock is deep or metallic.";
+
+    next =
+      "Avoid long driving until the source is checked. If the sound is deep, metallic, and follows RPM, treat it as urgent and have the engine inspected before continuing.";
+  } else if (engineBay && fastTick) {
+    risk = "Medium";
+    most = "Injector tick, lifter tap, valvetrain tick, or small exhaust tick";
+    second = "Pulley bearing noise, belt-driven accessory noise, or low-oil top-end ticking";
+    less = "Brake or wheel bearing noise because the sound appears engine-side";
+
+    why =
+      "The sound location points to the engine bay, and the tick-like character fits a repeating top-end or injector-style noise more than a wheel or brake issue. A fast tick that follows RPM usually points toward injector pulse, lifter tap, valvetrain movement, low oil, or a small exhaust leak near the manifold.";
+
+    inspect =
+      "Check engine oil level and condition first. Then listen near the injectors, valve cover, exhaust manifold, belt tensioner, idler pulley, and alternator. Compare idle versus light RPM.";
+
+    next =
+      "If the tick is light and stable, inspect soon. If it becomes louder, metallic, or comes with misfire, oil light, or power loss, stop driving and diagnose immediately.";
+  } else if ((frontWheel || rearWheel) && braking) {
+    risk = "Medium";
+    most = "Brake pad/rotor scraping, dust shield contact, or brake hardware noise";
+    second = "Wheel bearing roughness, tire contact, hub issue, or suspension component movement";
+    less = "Engine internal knock because the sound changes with braking or wheel area behavior";
+
+    why =
+      "The sound is tied to the wheel area and changes while braking. That strongly raises brake-related causes above engine causes. Brake scrape, pad-to-rotor contact, dust shield rubbing, worn pads, or loose brake hardware fit better than internal engine noise.";
+
+    inspect =
+      "Inspect brake pads, rotors, dust shield clearance, caliper hardware, wheel bearing play, and any shiny metal contact marks. Check the side where the sound is strongest first.";
+
+    next =
+      "Do not ignore brake-related grinding. If the sound is loud, metallic, or braking feels weak or uneven, avoid driving until the brakes are inspected.";
+  } else if ((frontWheel || rearWheel) && speed) {
+    risk = "Medium";
+    most = "Wheel bearing growl, tire noise, hub issue, or rotational wheel noise";
+    second = "Brake drag, dust shield contact, CV axle noise, or suspension bushing movement";
+    less = "Engine knock because the sound follows vehicle speed more than RPM";
+
+    why =
+      "A sound that changes with vehicle speed points toward rotating wheel or drivetrain components rather than the engine. Wheel bearing growl, tire noise, hub roughness, brake drag, or CV-related noise become more likely.";
+
+    inspect =
+      "Check wheel bearing play, tire condition, brake drag, dust shield contact, hub noise, and CV axle boots. Compare left and right sides and listen during slow movement.";
+
+    next =
+      "Have the wheel area inspected before highway driving if the hum or growl gets louder with speed.";
+  } else if (underCar) {
+    risk = "Medium";
+    most = "Exhaust leak, loose heat shield, underbody rattle, flex pipe noise, or loose bracket";
+    second = "Catalytic converter shield rattle, driveline vibration, or underbody scrape";
+    less = "Top-end engine tick unless the sound clearly follows RPM from the engine bay";
+
+    why =
+      "The reported location is under the car or near the exhaust area, so underbody and exhaust causes should be raised. Loose shields, exhaust leaks, flex pipe noise, catalytic converter shield rattle, or underbody contact often sound metallic or pulsing from below.";
+
+    inspect =
+      "Inspect heat shields, exhaust hangers, flex pipe, catalytic converter shield, loose brackets, underbody panels, and any contact marks. Check for exhaust smell or puffing near joints.";
+
+    next =
+      "If there is exhaust smell inside the cabin, loud puffing, or visible smoke, avoid driving until the exhaust is checked.";
+  } else if (scraping) {
+    risk = "Medium";
+    most = "Metal scraping from brake, dust shield, rotor contact, or loose shield";
+    second = "Pulley bearing scrape, underbody contact, or wheel-area rubbing";
+    less = "Deep internal engine failure unless the sound is from the engine bay and follows RPM";
+
+    why =
+      "The sound was described as scraping, which raises contact-related causes. Metal scraping usually means something is touching, rubbing, or loose rather than a normal engine operating sound.";
+
+    inspect =
+      "Look for shiny metal contact, dust shield rubbing, brake pad wear, rotor scoring, loose shields, pulley contact, and underbody scraping.";
+
+    next =
+      "Avoid driving if scraping is loud, constant, or changes when braking.";
+  } else if (squeal) {
+    risk = "Medium";
+    most = "Belt chirp, belt squeal, weak tensioner, pulley bearing, or accessory belt slip";
+    second = "Hissing leak, sharp metal contact, alternator pulley, A/C pulley, or idler pulley noise";
+    less = "Rod knock because squeal and chirp are usually high-frequency belt/accessory sounds";
+
+    why =
+      "The sound character points toward a high-frequency chirp or squeal. That fits belt slip, weak belt tension, pulley bearing noise, alternator load, A/C load, wet belt behavior, or accessory drive noise more than a deep engine knock.";
+
+    inspect =
+      "Inspect the serpentine belt, tensioner, idler pulley, alternator pulley, A/C pulley, and belt condition. Listen during cold start, A/C on, steering load, and light acceleration.";
+
+    next =
+      "Schedule inspection soon. Stop driving if the belt looks damaged, the battery light appears, steering becomes heavy, or the engine overheats.";
+  } else {
+    risk = "Medium";
+    most = audioIntelligence?.mostLikely || "Dominant mechanical sound family";
+    second = audioIntelligence?.secondary || "Related engine, belt, pulley, wheel, brake, suspension, or exhaust noise";
+    less = audioIntelligence?.lessLikely || "Severe internal failure unless the sound becomes louder, metallic, or comes with strong symptoms";
+
+    why =
+      "The answers and audio direction point to a mechanical sound family, but the strongest confirmation depends on where the sound is loudest and whether it changes with RPM, speed, braking, turning, startup, or load. Those behavior changes separate engine noise from wheel, brake, suspension, belt, and exhaust noise.";
+
+    inspect =
+      "Start with the area selected by the user. Compare idle, light RPM, braking, turning, and slow movement. Look for loose parts, metal contact, belt or pulley noise, bearing hum, exhaust leaks, or rhythmic engine ticking.";
+
+    next =
+      "Use one more focused check near the loudest area before driving far. If the sound becomes deep, metallic, loud, or comes with warning lights, stop driving.";
+  }
+
+  if (isEs) {
+    return cleanAndFinalize(`Diagnosis status: analysis
+
+Voice summary:
+El sonido apunta más hacia ${most}.
+
+Risk level:
+${risk}
+
+Likely issue:
+Most likely: ${most}
+Secondary possibility: ${second}
+Less likely: ${less}
+
+Why it fits:
+${why}
+
+What to inspect next:
+${inspect}
+
+What to do next:
+${next}
+
+Answer options:
+None
+
+When to stop driving:
+Deja de manejar si el sonido se vuelve fuerte, metálico profundo, aparece pérdida de potencia, olor a quemado, humo, sobrecalentamiento, grinding fuerte o una luz roja.`);
+  }
+
+  return cleanAndFinalize(`Diagnosis status: analysis
+
+Voice summary:
+The sound points more toward ${most}.
+
+Risk level:
+${risk}
+
+Likely issue:
+Most likely: ${most}
+Secondary possibility: ${second}
+Less likely: ${less}
+
+Why it fits:
+${why}
+
+What to inspect next:
+${inspect}
+
+What to do next:
+${next}
+
+Answer options:
+None
+
+When to stop driving:
+Stop driving if the sound becomes loud, deep metallic, power drops, you smell burning, see smoke, the engine overheats, heavy grinding appears, or a red warning light comes on.`);
+}
 
 function strengthenWeakAudioReport({
   result,
