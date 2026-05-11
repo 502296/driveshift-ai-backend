@@ -16,6 +16,13 @@ export default async function handler(req, res) {
     const lang = language === "es" ? "es" : "en";
     const duration = Number(durationSeconds || 0);
     const audioSize = String(audio || "").trim().length;
+    const normalizedFormat = normalizeAudioFormat(audioFormat);
+
+    const signal = analyzeAudioSignal({
+      audioBase64: audio,
+      audioFormat: normalizedFormat,
+      durationSeconds: duration,
+    });
 
     const audioIntelligence = buildAudioIntelligence({
       selectedSoundPattern,
@@ -23,6 +30,7 @@ export default async function handler(req, res) {
       audioSize,
       vehicleProfile,
       lang,
+      signal,
     });
 
     if (!audio || audioSize < 1000) {
@@ -41,12 +49,13 @@ export default async function handler(req, res) {
       durationSeconds: duration,
       vehicleProfile,
       audioIntelligence,
+      signal,
     });
 
     const aiText = await requestAudioDiagnosis({
       prompt,
       audioBase64: audio,
-      audioFormat: normalizeAudioFormat(audioFormat),
+      audioFormat: normalizedFormat,
     });
 
     let result =
@@ -67,20 +76,306 @@ export default async function handler(req, res) {
 
     return res.status(200).json({ result });
   } catch (error) {
+    const lang = req.body?.language === "es" ? "es" : "en";
+
     return res.status(200).json({
       result: buildAudioFallbackReport({
-        lang: req.body?.language === "es" ? "es" : "en",
+        lang,
         durationSeconds: req.body?.durationSeconds || 0,
         audioIntelligence: buildAudioIntelligence({
           selectedSoundPattern: req.body?.selectedSoundPattern || "",
           durationSeconds: req.body?.durationSeconds || 0,
           audioSize: 0,
           vehicleProfile: req.body?.vehicleProfile || {},
-          lang: req.body?.language === "es" ? "es" : "en",
+          lang,
+          signal: null,
         }),
       }),
     });
   }
+}
+
+function analyzeAudioSignal({ audioBase64, audioFormat, durationSeconds }) {
+  try {
+    if (!audioBase64 || normalizeAudioFormat(audioFormat) !== "wav") {
+      return {
+        available: false,
+        reason: "Signal analysis skipped because audio is not WAV.",
+      };
+    }
+
+    const decoded = decodeWavPcm16(audioBase64);
+    if (!decoded || !decoded.samples?.length) {
+      return {
+        available: false,
+        reason: "Could not decode WAV PCM samples.",
+      };
+    }
+
+    const { samples, sampleRate } = decoded;
+    const duration = Number(durationSeconds || samples.length / sampleRate || 0);
+
+    const maxSamples = Math.min(samples.length, sampleRate * 12);
+    const segment = samples.slice(0, maxSamples);
+
+    let sumSq = 0;
+    let peak = 0;
+    let zeroCrossings = 0;
+
+    for (let i = 0; i < segment.length; i++) {
+      const v = segment[i];
+      sumSq += v * v;
+      peak = Math.max(peak, Math.abs(v));
+
+      if (i > 0) {
+        const prev = segment[i - 1];
+        if ((prev >= 0 && v < 0) || (prev < 0 && v >= 0)) zeroCrossings++;
+      }
+    }
+
+    const rms = Math.sqrt(sumSq / Math.max(1, segment.length));
+    const zcr = zeroCrossings / Math.max(1, segment.length);
+
+    const envelope = buildEnvelope(segment, sampleRate);
+    const pulse = analyzePulseEnvelope(envelope, duration);
+
+    const spectral = analyzeSpectralBands(segment, sampleRate);
+
+    const hints = [];
+    const evidence = [];
+
+    if (rms < 0.012) {
+      hints.push("very_quiet_recording");
+      evidence.push("The recorded signal appears very quiet.");
+    } else if (rms < 0.035) {
+      hints.push("quiet_recording");
+      evidence.push("The recorded signal is usable but relatively quiet.");
+    } else {
+      hints.push("usable_signal_strength");
+      evidence.push("The recording has usable signal strength.");
+    }
+
+    if (peak > 0.75) {
+      hints.push("possible_clipping_or_very_loud_signal");
+      evidence.push("The recording has high peaks that may include sharp noise or clipping.");
+    }
+
+    if (pulse.pulseRate >= 3 && pulse.pulseRate <= 18 && pulse.regularity > 0.32) {
+      hints.push("rhythmic_repeating_pulse");
+      evidence.push(`Repeating pulse pattern detected around ${pulse.pulseRate.toFixed(1)} pulses/sec.`);
+    }
+
+    if (spectral.lowRatio > 0.42 && rms > 0.02) {
+      hints.push("low_frequency_knock_or_heavy_vibration");
+      evidence.push("Low-frequency energy is dominant, which may fit knock or heavy vibration.");
+    }
+
+    if (spectral.highRatio > 0.38 && zcr > 0.08) {
+      hints.push("high_frequency_squeal_hiss_or_sharp_noise");
+      evidence.push("High-frequency energy and zero crossings suggest squeal, hiss, or sharp metallic noise.");
+    }
+
+    if (spectral.midHighRatio > 0.34 && pulse.pulseRate > 5) {
+      hints.push("ticking_or_metallic_rattle_possible");
+      evidence.push("Mid/high rhythmic content may fit ticking, tapping, or metallic rattling.");
+    }
+
+    if (zcr > 0.16 && spectral.highRatio > 0.30) {
+      hints.push("hissing_air_noise_possible");
+      evidence.push("Noisy high-frequency texture may fit hissing, air leak, or exhaust leak.");
+    }
+
+    return {
+      available: true,
+      sampleRate,
+      sampleCount: segment.length,
+      duration,
+      rms: round(rms),
+      peak: round(peak),
+      zcr: round(zcr),
+      pulseRate: round(pulse.pulseRate),
+      pulseRegularity: round(pulse.regularity),
+      lowRatio: round(spectral.lowRatio),
+      midRatio: round(spectral.midRatio),
+      highRatio: round(spectral.highRatio),
+      midHighRatio: round(spectral.midHighRatio),
+      hints,
+      evidence,
+    };
+  } catch (_) {
+    return {
+      available: false,
+      reason: "Signal analysis failed safely.",
+    };
+  }
+}
+
+function decodeWavPcm16(audioBase64) {
+  const buffer = Buffer.from(audioBase64, "base64");
+
+  if (buffer.length < 44) return null;
+  if (buffer.toString("ascii", 0, 4) !== "RIFF") return null;
+  if (buffer.toString("ascii", 8, 12) !== "WAVE") return null;
+
+  let offset = 12;
+  let audioFormat = null;
+  let channels = null;
+  let sampleRate = null;
+  let bitsPerSample = null;
+  let dataOffset = null;
+  let dataSize = null;
+
+  while (offset + 8 <= buffer.length) {
+    const id = buffer.toString("ascii", offset, offset + 4);
+    const size = buffer.readUInt32LE(offset + 4);
+    const chunkStart = offset + 8;
+
+    if (id === "fmt ") {
+      audioFormat = buffer.readUInt16LE(chunkStart);
+      channels = buffer.readUInt16LE(chunkStart + 2);
+      sampleRate = buffer.readUInt32LE(chunkStart + 4);
+      bitsPerSample = buffer.readUInt16LE(chunkStart + 14);
+    }
+
+    if (id === "data") {
+      dataOffset = chunkStart;
+      dataSize = size;
+      break;
+    }
+
+    offset = chunkStart + size + (size % 2);
+  }
+
+  if (!dataOffset || !dataSize || audioFormat !== 1 || bitsPerSample !== 16) {
+    return null;
+  }
+
+  const samples = [];
+  const bytesPerSample = 2;
+  const frameSize = channels * bytesPerSample;
+  const frames = Math.floor(dataSize / frameSize);
+
+  for (let i = 0; i < frames; i++) {
+    const frameOffset = dataOffset + i * frameSize;
+
+    let mixed = 0;
+    for (let ch = 0; ch < channels; ch++) {
+      const sample = buffer.readInt16LE(frameOffset + ch * bytesPerSample);
+      mixed += sample / 32768;
+    }
+
+    samples.push(mixed / channels);
+  }
+
+  return { samples, sampleRate };
+}
+
+function buildEnvelope(samples, sampleRate) {
+  const frameSize = Math.max(256, Math.floor(sampleRate * 0.04));
+  const envelope = [];
+
+  for (let i = 0; i < samples.length; i += frameSize) {
+    let sum = 0;
+    let count = 0;
+
+    for (let j = i; j < Math.min(samples.length, i + frameSize); j++) {
+      sum += samples[j] * samples[j];
+      count++;
+    }
+
+    envelope.push(Math.sqrt(sum / Math.max(1, count)));
+  }
+
+  return envelope;
+}
+
+function analyzePulseEnvelope(envelope, durationSeconds) {
+  if (!envelope.length || !durationSeconds) {
+    return { pulseRate: 0, regularity: 0 };
+  }
+
+  const avg =
+    envelope.reduce((sum, value) => sum + value, 0) / Math.max(1, envelope.length);
+
+  const threshold = avg * 1.45;
+  const peaks = [];
+
+  for (let i = 1; i < envelope.length - 1; i++) {
+    if (
+      envelope[i] > threshold &&
+      envelope[i] > envelope[i - 1] &&
+      envelope[i] >= envelope[i + 1]
+    ) {
+      peaks.push(i);
+    }
+  }
+
+  const pulseRate = peaks.length / Math.max(1, durationSeconds);
+
+  let regularity = 0;
+  if (peaks.length >= 3) {
+    const gaps = [];
+    for (let i = 1; i < peaks.length; i++) gaps.push(peaks[i] - peaks[i - 1]);
+
+    const mean = gaps.reduce((s, g) => s + g, 0) / gaps.length;
+    const variance =
+      gaps.reduce((s, g) => s + Math.pow(g - mean, 2), 0) / gaps.length;
+
+    const std = Math.sqrt(variance);
+    regularity = mean > 0 ? Math.max(0, 1 - std / mean) : 0;
+  }
+
+  return { pulseRate, regularity };
+}
+
+function analyzeSpectralBands(samples, sampleRate) {
+  const targetLength = Math.min(samples.length, 16000);
+  const step = Math.max(1, Math.floor(samples.length / targetLength));
+  const segment = [];
+
+  for (let i = 0; i < samples.length && segment.length < targetLength; i += step) {
+    segment.push(samples[i]);
+  }
+
+  const freqs = [80, 150, 300, 700, 1200, 2500, 4200, 6500];
+  const energies = {};
+
+  for (const f of freqs) {
+    energies[f] = goertzelEnergy(segment, sampleRate / step, f);
+  }
+
+  const low = energies[80] + energies[150];
+  const mid = energies[300] + energies[700] + energies[1200];
+  const high = energies[2500] + energies[4200] + energies[6500];
+  const total = low + mid + high || 1;
+
+  return {
+    lowRatio: low / total,
+    midRatio: mid / total,
+    highRatio: high / total,
+    midHighRatio: (mid + high) / total,
+  };
+}
+
+function goertzelEnergy(samples, sampleRate, targetFreq) {
+  const n = samples.length;
+  if (!n || targetFreq >= sampleRate / 2) return 0;
+
+  const k = Math.round((n * targetFreq) / sampleRate);
+  const omega = (2 * Math.PI * k) / n;
+  const coeff = 2 * Math.cos(omega);
+
+  let q0 = 0;
+  let q1 = 0;
+  let q2 = 0;
+
+  for (let i = 0; i < n; i++) {
+    q0 = coeff * q1 - q2 + samples[i];
+    q2 = q1;
+    q1 = q0;
+  }
+
+  return q1 * q1 + q2 * q2 - coeff * q1 * q2;
 }
 
 function buildAudioIntelligence({
@@ -89,6 +384,7 @@ function buildAudioIntelligence({
   audioSize,
   vehicleProfile,
   lang,
+  signal,
 }) {
   const pattern = String(selectedSoundPattern || "").toLowerCase();
   const duration = Number(durationSeconds || 0);
@@ -116,6 +412,51 @@ function buildAudioIntelligence({
     hints.push("Audio payload size suggests a usable recording was received.");
   } else {
     hints.push("Audio payload may be weak or quiet.");
+  }
+
+  if (signal?.available) {
+    hints.push(...signal.hints);
+    hints.push(
+      `Signal metrics: rms=${signal.rms}, peak=${signal.peak}, zcr=${signal.zcr}, pulseRate=${signal.pulseRate}, lowRatio=${signal.lowRatio}, highRatio=${signal.highRatio}`
+    );
+
+    if (signal.hints.includes("low_frequency_knock_or_heavy_vibration")) {
+      add(
+        "engine_knock_or_heavy_vibration",
+        "Low-frequency knock, heavy engine vibration, mount issue, or rotating mechanical load",
+        44,
+        "WAV signal shows dominant low-frequency energy"
+      );
+    }
+
+    if (signal.hints.includes("ticking_or_metallic_rattle_possible")) {
+      add(
+        "ticking_or_rattle",
+        "Rhythmic ticking, tapping, valvetrain noise, injector tick, heat shield rattle, or pulley rattle",
+        42,
+        "WAV signal shows rhythmic mid/high pulse behavior"
+      );
+    }
+
+    if (signal.hints.includes("high_frequency_squeal_hiss_or_sharp_noise")) {
+      add(
+        "squeal_hiss_or_sharp_noise",
+        "Belt squeal, pulley bearing noise, hissing leak, or sharp metallic contact",
+        40,
+        "WAV signal shows high-frequency energy"
+      );
+    }
+
+    if (signal.hints.includes("hissing_air_noise_possible")) {
+      add(
+        "air_or_exhaust_leak",
+        "Vacuum leak, intake leak, exhaust leak, boost leak, or pressure leak",
+        34,
+        "WAV signal has noisy high-frequency texture"
+      );
+    }
+  } else {
+    hints.push(signal?.reason || "No local WAV signal metrics available.");
   }
 
   if (includesAny(pattern, ["tick", "ticking", "tap", "tapping", "lifter"])) {
@@ -195,7 +536,7 @@ function buildAudioIntelligence({
       "unclear_audio_direction",
       "Abnormal vehicle sound needing closer source recording",
       20,
-      "no clear preselected sound pattern"
+      "no clear preselected sound pattern and weak local signal hints"
     );
     add(
       "rotational_or_engine_noise",
@@ -226,6 +567,7 @@ function buildAudioPrompt({
   durationSeconds,
   vehicleProfile,
   audioIntelligence,
+  signal,
 }) {
   const isEs = lang === "es";
   const vehicleText = buildVehicleText(vehicleProfile);
@@ -234,7 +576,7 @@ function buildAudioPrompt({
   return `
 You are DriveShift Doctor, a premium automotive diagnostic intelligence.
 
-You are analyzing a real vehicle audio recording.
+You are analyzing a real vehicle audio recording plus local WAV signal metrics.
 Think like a senior mechanic listening to a car sound.
 
 Language:
@@ -247,12 +589,16 @@ Recording duration:
 ${duration} seconds
 
 User selected sound pattern:
-${selectedSoundPattern || "Unknown - rely on the real audio if possible"}
+${selectedSoundPattern || "Unknown - rely on audio and signal metrics"}
 
-DriveShift local audio intelligence:
+Local WAV signal analysis:
+${signal?.available ? JSON.stringify(signal, null, 2) : signal?.reason || "No signal metrics"}
+
+DriveShift audio intelligence:
 Most likely direction: ${audioIntelligence.mostLikely}
 Secondary direction: ${audioIntelligence.secondary}
 Less likely direction: ${audioIntelligence.lessLikely}
+
 Audio hints:
 ${audioIntelligence.hints.join("\n")}
 
@@ -260,47 +606,19 @@ Ranked audio candidates:
 ${audioIntelligence.ranked
   .map(
     (x, i) =>
-      `${i + 1}. ${x.label} — score ${x.score}. Evidence: ${x.evidence.join(
-        "; "
-      )}`
+      `${i + 1}. ${x.label} — score ${x.score}. Evidence: ${x.evidence.join("; ")}`
   )
   .join("\n")}
 
-Important audio reasoning:
-- The recording may be imperfect. Do not invent certainty.
-- Do not hide behind "unclear" unless the audio is truly unusable.
+Important reasoning:
+- Use the local WAV signal metrics as diagnostic clues, not absolute proof.
+- Do not hide behind "unclear" unless the signal is truly unusable.
 - Even if confidence is limited, give the strongest diagnostic direction.
-- If the sound is quiet, give a cautious ranked report instead of a generic refusal.
-- Identify the dominant sound character when possible.
-- Separate:
-  1. rhythmic ticking/tapping
-  2. deep knocking
-  3. metallic rattling
-  4. belt squeal/chirp
-  5. grinding/bearing roughness
-  6. hissing/vacuum/exhaust leak
-  7. starter clicking
-  8. misfire shake/uneven idle
-  9. exhaust leak puffing
-  10. wheel/brake/suspension noise
-
-Mechanic rules:
-- Ticking that follows RPM may point toward valve train, lifter, injector tick, exhaust leak, or low oil.
-- Deep knocking that follows RPM is more serious and may point toward rod bearing, piston slap, or severe internal wear.
-- Belt squeal often changes with cold start, steering load, A/C, alternator load, or wet belt.
-- Hissing may point toward vacuum leak, intake leak, exhaust leak, or pressure leak.
-- Grinding near wheels or when braking points toward brakes, wheel bearing, dust shield, or rotor/pad contact.
-- Rapid clicking during start points toward weak battery, poor connection, starter relay, or voltage drop.
-- Rhythmic shaking with uneven exhaust note may point toward misfire.
+- If low-frequency energy dominates, consider knock, heavy vibration, engine mount, rotational load, or deep mechanical sound.
+- If rhythmic mid/high pulses appear, consider ticking, tapping, injector tick, valvetrain, exhaust tick, pulley rattle, or metallic rattle.
+- If high-frequency energy and high zero-crossing appear, consider belt squeal, hissing, sharp metal contact, or air/exhaust leak.
+- If pulse rate is regular, explain why rhythm matters.
 - Do not recommend replacing parts immediately unless evidence is strong.
-
-Report style:
-- Premium, calm, mechanic-like.
-- Concise but useful.
-- Rank causes clearly.
-- Do not mention AI, backend, model, prompt, or system instructions.
-- Do not ask another question.
-- Do not output markdown tables.
 
 Output exactly this format:
 
@@ -318,7 +636,7 @@ Secondary possibility: [second cause]
 Less likely: [third cause or less likely unless new evidence appears]
 
 Why it fits:
-[explain why the sound pattern points there, or if unclear, still explain the strongest direction]
+[explain why the sound and signal metrics point there]
 
 What to inspect next:
 [specific checks in order]
@@ -360,8 +678,8 @@ async function requestAudioDiagnosis({ prompt, audioBase64, audioFormat }) {
             ],
           },
         ],
-        temperature: 0.03,
-        max_output_tokens: 1050,
+        temperature: 0.025,
+        max_output_tokens: 1100,
       }),
     });
 
@@ -400,7 +718,7 @@ function strengthenWeakAudioReport({
     return cleanAndFinalize(`Diagnosis status: analysis
 
 Voice summary:
-DriveShift recibió la grabación y la dirección más fuerte es revisar primero la familia de ruido dominante, aunque la grabación puede mejorar.
+DriveShift recibió la grabación y detectó una dirección mecánica inicial usando el patrón de señal.
 
 Risk level:
 Medium
@@ -411,13 +729,13 @@ Secondary possibility: ${audioIntelligence.secondary}
 Less likely: ${audioIntelligence.lessLikely}
 
 Why it fits:
-La grabación de ${duration} segundos fue suficiente para crear una primera dirección, pero no lo bastante clara para confirmar una sola pieza. La familia de sonido más fuerte debe guiar la inspección inicial, especialmente si el ruido cambia con RPM, arranque, aceleración, freno o giro.
+La grabación de ${duration} segundos no confirma una sola pieza, pero la señal permite orientar la inspección hacia la familia de ruido dominante. El comportamiento debe compararse con RPM, arranque, aceleración, A/C, dirección, freno o movimiento.
 
 What to inspect next:
-Primero localiza de dónde viene el sonido: motor, banda/polea, rueda/freno, escape o área de arranque. Luego observa si cambia con idle, aceleración suave, A/C, dirección, frenado o movimiento del vehículo.
+Localiza primero el área más fuerte: motor, banda/polea, rueda/freno, escape o arranque. Después compara si el sonido cambia con idle, aceleración suave, A/C, dirección, frenado o movimiento.
 
 What to do next:
-Graba otra vez cerca de la fuente del sonido y compara: una grabación en idle, una con aceleración suave y una cerca del área donde el ruido es más fuerte.
+Graba otra vez cerca de la fuente y compara tres grabaciones cortas: idle, aceleración suave y el área donde el sonido es más fuerte.
 
 Answer options:
 None
@@ -429,7 +747,7 @@ Deja de manejar si el sonido se vuelve fuerte, metálico profundo, aparece pérd
   return cleanAndFinalize(`Diagnosis status: analysis
 
 Voice summary:
-DriveShift received the recording and the strongest direction is to inspect the dominant sound family first, even though a clearer recording would improve confidence.
+DriveShift received the recording and detected an initial mechanical direction from the signal pattern.
 
 Risk level:
 Medium
@@ -440,13 +758,13 @@ Secondary possibility: ${audioIntelligence.secondary}
 Less likely: ${audioIntelligence.lessLikely}
 
 Why it fits:
-The ${duration} second recording was enough for a first-pass direction, but not clear enough to confirm one exact part. The strongest sound family should guide the first inspection, especially if the noise changes with RPM, startup, acceleration, braking, turning, or vehicle movement.
+The ${duration} second recording does not confirm one exact part, but the signal pattern is enough to guide inspection toward the dominant sound family. The behavior should be compared against RPM, startup, acceleration, A/C load, steering load, braking, or movement.
 
 What to inspect next:
-First locate the sound source: engine, belt/pulley area, wheel/brake area, exhaust, or starter area. Then check whether the sound changes at idle, with light revving, A/C load, steering load, braking, or vehicle movement.
+First locate the loudest area: engine, belt/pulley area, wheel/brake area, exhaust, or starter. Then check whether the sound changes at idle, with light revving, A/C load, steering load, braking, or movement.
 
 What to do next:
-Record again close to the sound source and compare three short recordings: idle, light revving, and the area where the sound is loudest.
+Record again close to the source and compare three short recordings: idle, light revving, and the area where the sound is loudest.
 
 Answer options:
 None
@@ -509,7 +827,7 @@ Secondary possibility: ${audioIntelligence.secondary}
 Less likely: ${audioIntelligence.lessLikely}
 
 Why it fits:
-La grabación de ${duration} segundos no confirmó una sola pieza, pero sí permite iniciar por la familia de ruido dominante. El resultado debe confirmarse con una grabación más cercana, síntomas, códigos OBD o inspección visual.
+La grabación de ${duration} segundos no confirmó una sola pieza, pero sí permite iniciar por la familia de ruido dominante usando la señal de audio.
 
 What to inspect next:
 Revisa primero el área donde el ruido suena más fuerte. Compara si cambia con idle, aceleración suave, arranque, A/C, dirección, frenado o movimiento.
@@ -538,7 +856,7 @@ Secondary possibility: ${audioIntelligence.secondary}
 Less likely: ${audioIntelligence.lessLikely}
 
 Why it fits:
-The ${duration} second recording did not confirm one exact part, but it is enough to start with the dominant sound family. The result should be confirmed with a closer recording, symptoms, OBD codes, or visual inspection.
+The ${duration} second recording did not confirm one exact part, but it is enough to start with the dominant sound family using the audio signal pattern.
 
 What to inspect next:
 Start with the area where the sound is loudest. Compare whether it changes at idle, with light revving, startup, A/C load, steering load, braking, or movement.
@@ -605,4 +923,8 @@ function buildVehicleText(profile) {
 function includesAny(text, words) {
   const clean = String(text || "").toLowerCase();
   return words.some((w) => clean.includes(w));
+}
+
+function round(value) {
+  return Math.round(Number(value || 0) * 1000) / 1000;
 }
