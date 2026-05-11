@@ -547,10 +547,29 @@ function buildAudioIntelligence({
   }
 
   ranked.sort((a, b) => b.score - a.score);
+  const metricsText = signal?.available
+  ? `rms=${signal.rms}, peak=${signal.peak}, zcr=${signal.zcr}, pulseRate=${signal.pulseRate}, lowRatio=${signal.lowRatio}, highRatio=${signal.highRatio}`
+  : "No signal metrics";
+
+let signalClassification = "balanced_signal";
+
+if (signal?.lowRatio > 0.7) {
+  signalClassification = "low_frequency_mechanical_pattern";
+}
+
+if (signal?.peak > 0.78) {
+  signalClassification += ", strong_impact_or_knock_energy";
+}
+
+if (signal?.zcr < 0.12) {
+  signalClassification += ", deep_rotational_pattern";
+}
 
   return {
     hints,
     ranked,
+    metricsText,
+  signalClassification,
     mostLikely: ranked[0]?.label || "Abnormal vehicle sound",
     secondary:
       ranked[1]?.label ||
