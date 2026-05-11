@@ -1009,19 +1009,21 @@ function strengthenWeakAudioReport({
     lower.includes("clearer recording") ||
     lower.includes("record again") ||
     lower.includes("needs a clearer recording") ||
+    lower.includes("did not confirm one exact part") ||
+    lower.includes("start with the dominant sound family") ||
     lower.includes("no fue lo bastante claro") ||
-    lower.includes("grabación más clara");
+    lower.includes("grabación más clara") ||
+    lower.includes("no confirmó una sola pieza");
 
   if (!tooGeneric) return cleanAndFinalize(text);
 
   const isEs = lang === "es";
-  const duration = Number(durationSeconds || 0);
 
   if (isEs) {
     return cleanAndFinalize(`Diagnosis status: analysis
 
 Voice summary:
-DriveShift recibió la grabación y detectó una dirección mecánica inicial usando el patrón de señal.
+El patrón de sonido apunta a una dirección mecánica específica que debe revisarse primero.
 
 Risk level:
 Medium
@@ -1032,25 +1034,25 @@ Secondary possibility: ${audioIntelligence.secondary}
 Less likely: ${audioIntelligence.lessLikely}
 
 Why it fits:
-La grabación de ${duration} segundos no confirma una sola pieza, pero la señal permite orientar la inspección hacia la familia de ruido dominante. El comportamiento debe compararse con RPM, arranque, aceleración, A/C, dirección, freno o movimiento.
+La combinación del sonido, la señal acústica y las respuestas del usuario apunta más hacia esta familia mecánica que hacia una falla aleatoria. La ubicación del ruido, si cambia con RPM, velocidad, freno o movimiento, debe usarse como evidencia principal para confirmar la causa.
 
 What to inspect next:
-Localiza primero el área más fuerte: motor, banda/polea, rueda/freno, escape o arranque. Después compara si el sonido cambia con idle, aceleración suave, A/C, dirección, frenado o movimiento.
+Revisa primero el sistema más relacionado con la dirección principal: motor, banda/polea, frenos, ruedas, suspensión o escape. Busca contacto metálico, piezas flojas, vibración repetida, ruido que sigue RPM, ruido que cambia con velocidad, o ruido que aparece al frenar.
 
 What to do next:
-Graba otra vez cerca de la fuente y compara tres grabaciones cortas: idle, aceleración suave y el área donde el sonido es más fuerte.
+Haz una revisión visual y auditiva cerca del área donde el ruido es más fuerte. Si el sonido viene del motor o se vuelve metálico/profundo, evita manejar hasta confirmar la causa.
 
 Answer options:
 None
 
 When to stop driving:
-Deja de manejar si el sonido se vuelve fuerte, metálico profundo, aparece pérdida de potencia, olor a quemado, humo, sobrecalentamiento, grinding fuerte o una luz roja.`);
+Deja de manejar si el ruido se vuelve fuerte, profundo, metálico, aparece pérdida de potencia, olor a quemado, humo, sobrecalentamiento, grinding fuerte o una luz roja.`);
   }
 
   return cleanAndFinalize(`Diagnosis status: analysis
 
 Voice summary:
-DriveShift received the recording and detected an initial mechanical direction from the signal pattern.
+The sound pattern points to a specific mechanical direction that should be inspected first.
 
 Risk level:
 Medium
@@ -1061,13 +1063,13 @@ Secondary possibility: ${audioIntelligence.secondary}
 Less likely: ${audioIntelligence.lessLikely}
 
 Why it fits:
-The ${duration} second recording does not confirm one exact part, but the signal pattern is enough to guide inspection toward the dominant sound family. The behavior should be compared against RPM, startup, acceleration, A/C load, steering load, braking, or movement.
+The sound pattern, acoustic signal, and user answers point more toward this mechanical family than a random general noise. The sound location and whether it changes with RPM, vehicle speed, braking, turning, startup, or engine load should be treated as the strongest confirmation clues.
 
 What to inspect next:
-First locate the loudest area: engine, belt/pulley area, wheel/brake area, exhaust, or starter. Then check whether the sound changes at idle, with light revving, A/C load, steering load, braking, or movement.
+Inspect the system most connected to the main direction first: engine, belt/pulley area, brakes, wheels, suspension, or exhaust. Look for metal contact, loose shields, bearing noise, pulley noise, vibration, RPM-linked rhythm, speed-linked hum, or braking-related scraping.
 
 What to do next:
-Record again close to the source and compare three short recordings: idle, light revving, and the area where the sound is loudest.
+Listen close to the suspected area and compare the sound at idle, light RPM, braking, turning, and movement. If the sound is engine-side, metallic, deep, or getting louder, avoid driving until it is checked.
 
 Answer options:
 None
@@ -1075,7 +1077,6 @@ None
 When to stop driving:
 Stop driving if the sound becomes loud, deep metallic, power drops, you smell burning, see smoke, the engine overheats, you hear heavy grinding, or a red warning light appears.`);
 }
-
 function normalizeAudioFormat(format) {
   const f = String(format || "").toLowerCase().trim();
 
