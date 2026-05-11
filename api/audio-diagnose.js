@@ -114,7 +114,25 @@ function buildAudioFollowUpBlock({ lang, audioIntelligence }) {
   const isEs = lang === "es";
   const primary = String(audioIntelligence?.mostLikely || "").toLowerCase();
 
-  let q1;
+  const q1 = {
+    question: isEs
+      ? "¿De dónde parece venir el sonido?"
+      : "Where does the sound seem to come from?",
+    options: isEs
+      ? [
+          "Área del motor",
+          "Suspensión/ruedas delanteras",
+          "Suspensión/ruedas traseras",
+          "Debajo del carro / escape",
+        ]
+      : [
+          "Engine bay / motor area",
+          "Front suspension / front wheels",
+          "Rear suspension / rear wheels",
+          "Under the car / exhaust area",
+        ],
+  };
+
   let q2;
   let q3;
 
@@ -124,28 +142,19 @@ function buildAudioFollowUpBlock({ lang, audioIntelligence }) {
     primary.includes("wheel") ||
     primary.includes("rotational")
   ) {
-    q1 = {
-      question: isEs
-        ? "¿El sonido cambia con la velocidad del vehículo o al frenar?"
-        : "Does the sound change with vehicle speed or braking?",
-      options: isEs
-        ? ["Cambia con velocidad", "Cambia al frenar", "Solo al girar", "No cambia"]
-        : ["Changes with speed", "Changes while braking", "Only while turning", "No change"],
-    };
-
     q2 = {
       question: isEs
-        ? "¿Dónde se escucha más fuerte?"
-        : "Where does the sound seem strongest?",
+        ? "¿El sonido cambia con velocidad, freno o giro?"
+        : "Does the sound change with speed, braking, or turning?",
       options: isEs
-        ? ["Rueda delantera", "Rueda trasera", "Centro del carro", "No estoy seguro"]
-        : ["Front wheel area", "Rear wheel area", "Under the car", "Not sure"],
+        ? ["Con velocidad", "Al frenar", "Al girar", "No cambia"]
+        : ["With speed", "While braking", "While turning", "No change"],
     };
 
     q3 = {
       question: isEs
-        ? "¿El sonido parece roce, zumbido, golpe o chirrido?"
-        : "Is the sound more like scraping, humming, knocking, or squealing?",
+        ? "¿Cómo describirías el sonido?"
+        : "How would you describe the sound?",
       options: isEs
         ? ["Roce metálico", "Zumbido", "Golpe", "Chirrido"]
         : ["Metal scraping", "Humming/growling", "Knocking", "Squealing"],
@@ -155,52 +164,40 @@ function buildAudioFollowUpBlock({ lang, audioIntelligence }) {
     primary.includes("chirp") ||
     primary.includes("squeal")
   ) {
-    q1 = {
-      question: isEs ? "¿Cuándo se escucha más fuerte?" : "When is the sound strongest?",
+    q2 = {
+      question: isEs
+        ? "¿Cuándo se escucha más fuerte?"
+        : "When is the sound strongest?",
       options: isEs
         ? ["Arranque en frío", "Con A/C encendido", "Al acelerar", "Todo el tiempo"]
         : ["Cold startup", "A/C turned on", "During acceleration", "All the time"],
     };
 
-    q2 = {
-      question: isEs
-        ? "¿El sonido cambia si giras el volante o enciendes accesorios?"
-        : "Does it change with steering load or accessories?",
-      options: isEs
-        ? ["Cambia al girar", "Cambia con A/C", "No cambia", "No sé"]
-        : ["Changes while steering", "Changes with A/C", "No change", "Not sure"],
-    };
-
     q3 = {
       question: isEs
-        ? "¿El sonido desaparece después من calentarse?"
-        : "Does the sound fade after the engine warms up?",
+        ? "¿Cambia con dirección, A/C o carga del motor?"
+        : "Does it change with steering, A/C, or engine load?",
       options: isEs
-        ? ["Sí desaparece", "Baja un poco", "Sigue igual", "Empeora"]
-        : ["Yes, it fades", "Gets a little quieter", "Stays the same", "Gets worse"],
+        ? ["Al girar", "Con A/C", "Con aceleración", "No cambia"]
+        : ["While steering", "With A/C", "With acceleration", "No change"],
     };
   } else {
-    q1 = {
+    q2 = {
       question: isEs
-        ? "¿El sonido se vuelve más rápido o más fuerte cuando sube el RPM?"
+        ? "¿El sonido se vuelve más rápido o fuerte cuando sube el RPM?"
         : "Does the sound become faster or louder when engine RPM increases?",
       options: isEs
-        ? ["Sí, claramente con RPM", "Solo en frío", "Más en idle", "No cambia"]
-        : ["Yes, clearly with RPM", "Only during cold start", "Mostly at idle", "No noticeable change"],
-    };
-
-    q2 = {
-      question: isEs ? "¿Cuándo aparece más?" : "When does it happen most?",
-      options: isEs
-        ? ["Arranque en frío", "Después de calentarse", "Acelerando", "En idle"]
-        : ["Cold startup", "After warm-up", "While accelerating", "At idle"],
+        ? ["Sí, con RPM", "Solo en frío", "Más en idle", "No cambia"]
+        : ["Yes, with RPM", "Only cold start", "Mostly at idle", "No change"],
     };
 
     q3 = {
-      question: isEs ? "¿Dónde se escucha más fuerte?" : "Where does it sound strongest?",
+      question: isEs
+        ? "¿Cómo describirías el sonido?"
+        : "How would you describe the sound?",
       options: isEs
-        ? ["Motor arriba", "Parte baja del motor", "Área de banda/polea", "No sé"]
-        : ["Top of engine", "Lower engine area", "Belt/pulley area", "Not sure"],
+        ? ["Golpe profundo", "Tick rápido", "Roce metálico", "Vibración"]
+        : ["Deep knock", "Fast ticking", "Metal scraping", "Vibration"],
     };
   }
 
@@ -234,7 +231,6 @@ ${q3.question}
 Answer options 3:
 ${q3.options.join("\n")}`;
 }
-
 function analyzeAudioSignal({ audioBase64, audioFormat, durationSeconds }) {
   try {
     if (!audioBase64 || normalizeAudioFormat(audioFormat) !== "wav") {
