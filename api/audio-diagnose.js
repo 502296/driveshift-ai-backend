@@ -482,9 +482,13 @@ function goertzelEnergy(samples, sampleRate, targetFreq) {
 function cleanAndFinalize({ text, mode, lang }) {
   let clean = String(text || "").trim();
 
-  if (!clean || clean.length < 40) {
-    return buildSafeErrorResponse(lang);
+if (!clean || clean.length < 40) {
+  if (mode === "follow_up") {
+    return buildEmergencyFollowUp(lang);
   }
+
+  return buildSafeErrorResponse(lang);
+}
 
   clean = clean
     .replace(/\*\*/g, "")
@@ -725,4 +729,59 @@ Stop driving if the sound becomes loud, metallic, smoke appears, you smell burni
 
 function round(value) {
   return Math.round(Number(value || 0) * 1000) / 1000;
+}
+function buildEmergencyFollowUp(lang) {
+  if (lang === "es") {
+    return `Diagnosis status: audio_follow_up
+
+Voice summary:
+El sonido fue recibido. Necesito dos detalles rápidos para cerrar el diagnóstico.
+
+Audio direction:
+Sound received and ready for scanner questions.
+
+Question 1:
+¿El sonido cambia más con RPM, velocidad, freno o giro?
+
+Answer options 1:
+RPM
+Velocidad
+Freno
+Giro
+
+Question 2:
+¿Cómo describirías el sonido?
+
+Answer options 2:
+Golpe
+Tick rápido
+Chirrido
+Grinding`;
+  }
+
+  return `Diagnosis status: audio_follow_up
+
+Voice summary:
+The sound was received. I need two quick scanner details before the final diagnosis.
+
+Audio direction:
+Sound received and ready for scanner questions.
+
+Question 1:
+What changes the sound the most?
+
+Answer options 1:
+RPM
+Speed
+Braking
+Turning
+
+Question 2:
+How would you describe the sound?
+
+Answer options 2:
+Deep knock
+Fast ticking
+Belt squeal
+Grinding`;
 }
