@@ -944,3 +944,57 @@ function applyPatternMemory({
     hasMatches: matched.length > 0,
   };
 }
+function buildCombinedText(issue, answers) {
+  return [
+    String(issue || ""),
+    ...(Array.isArray(answers)
+      ? answers.map((a) => `${a?.question || ""} ${a?.answer || ""}`)
+      : []),
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+
+function includesAny(text, words) {
+  const clean = String(text || "").toLowerCase();
+  return words.some((w) => clean.includes(String(w).toLowerCase()));
+}
+
+function extractText(data) {
+  try {
+    if (data.output_text) return data.output_text;
+
+    if (Array.isArray(data.output)) {
+      return data.output
+        .flatMap((item) => item.content || [])
+        .map((content) => content.text || "")
+        .join("\n")
+        .trim();
+    }
+
+    return "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function isTrueNoStart(text) {
+  const clean = String(text || "").toLowerCase();
+
+  const phrases = [
+    "won't start",
+    "will not start",
+    "does not start",
+    "doesn't start",
+    "no start",
+    "no crank",
+    "cranks but won't start",
+    "cranks but does not start",
+    "starter clicks",
+    "only clicks",
+    "crank no start",
+    "turns over but won't start",
+  ];
+
+  return phrases.some((p) => clean.includes(p));
+}
