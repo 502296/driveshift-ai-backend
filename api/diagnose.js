@@ -165,7 +165,8 @@ const STRONG_PATTERNS = [
         key: "lean_condition",
         reason:
           "vacuum leak or lean condition should not outrank misfire when fuel smell and flashing CEL are present",
-        penalty: 38,
+        penalty: 75,
+        strongDominantSignal: true,
       },
     ],
   },
