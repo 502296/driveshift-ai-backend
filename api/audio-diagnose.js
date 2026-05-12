@@ -32,12 +32,6 @@ export default async function handler(req, res) {
       });
     }
 
-    const signal = analyzeAudioSignal({
-      audioBase64,
-      audioFormat: format,
-      durationSeconds: duration,
-    });
-
     const mode =
       answers.length < REQUIRED_AUDIO_FOLLOWUPS ? "follow_up" : "analysis";
 
@@ -48,7 +42,6 @@ export default async function handler(req, res) {
       durationSeconds: duration,
       vehicleProfile,
       answers,
-      signal,
     });
 
     const aiText = await requestAudioDiagnosis({
@@ -65,8 +58,9 @@ export default async function handler(req, res) {
 
     return res.status(200).json({ result });
   } catch (error) {
-    const lang = req.body?.language === "es" ? "es" : "en";
+    console.log("AUDIO HANDLER ERROR:", error);
 
+    const lang = req.body?.language === "es" ? "es" : "en";
     return res.status(200).json({
       result: buildSafeErrorResponse(lang),
     });
@@ -80,7 +74,6 @@ function buildPrompt({
   durationSeconds,
   vehicleProfile,
   answers,
-  signal,
 }) {
   const isEs = lang === "es";
   const vehicleText = buildVehicleText(vehicleProfile);
@@ -94,15 +87,24 @@ Output exactly this format:
 Diagnosis status: audio_follow_up
 
 Voice summary:
-[one short mechanic sentence about what the sound seems to suggest]
+[one short mechanic sentence showing that you heard the recording]
 
 Audio direction:
-[short sound direction, not a final diagnosis]
+[short direction based on the sound and selected area]
 
 Question 1:
-[ask one smart follow-up question only]
+[one confirmation question that helps verify the sound behavior]
 
 Answer options 1:
+[option 1]
+[option 2]
+[option 3]
+[option 4]
+
+Question 2:
+[one confirmation question that helps verify the sound character]
+
+Answer options 2:
 [option 1]
 [option 2]
 [option 3]
@@ -125,7 +127,7 @@ Secondary possibility: [second cause]
 Less likely: [third cause]
 
 Why it fits:
-[explain why the sound, signal metrics, selected pattern, and answers point there]
+[explain why the recorded sound, selected area, and answers point there]
 
 What to inspect next:
 [specific checks in order]
@@ -144,17 +146,16 @@ When to stop driving:
 You are DriveShift Doctor, a premium automotive sound diagnostic system.
 
 You are listening to a real vehicle audio recording.
-Do not guess randomly.
-Do not mention that you are an AI.
+Do not mention AI.
+Do not say the recording is unclear unless the audio is truly empty.
+Do not ask the user to record again unless the audio is missing.
 Do not produce generic advice.
-Do not recommend replacing parts immediately unless the evidence is strong.
-Use the selected sound pattern and follow-up answers as major diagnostic context.
-If the sound location is engine bay, do not jump to brakes or wheels unless the user's answers clearly prove speed/braking behavior.
-If the sound follows RPM, prioritize engine, valvetrain, injector, lifter, belt, pulley, exhaust leak, or internal knock.
-If the sound follows vehicle speed, prioritize wheel bearing, tire, hub, brake drag, CV axle, or driveline.
-If the sound changes while braking, prioritize brake pad, rotor, caliper, dust shield, or brake hardware.
-If the sound is under the car, prioritize exhaust leak, heat shield, flex pipe, catalytic converter shield, loose bracket, or driveline vibration.
-If the recording is unclear, still give the best mechanical direction, but clearly say what would confirm it.
+Do not recommend replacing parts immediately unless evidence is strong.
+
+Important:
+The follow-up questions are only confirmation questions.
+They must feel like the scanner already listened to the sound.
+Do not make the user feel the diagnosis depends only on button answers.
 
 Language:
 ${isEs ? "Spanish only" : "English only"}
@@ -168,18 +169,27 @@ ${vehicleText}
 Recording duration:
 ${durationSeconds || "Unknown"} seconds
 
-User selected sound pattern:
+Selected sound source / pattern:
 ${selectedSoundPattern || "Not selected"}
 
-Previous follow-up answers:
+Previous confirmation answers:
 ${answerText || "None"}
 
-Local signal notes:
-${formatSignal(signal)}
+Diagnostic rules:
+- If selected area is engine bay, prioritize RPM-linked engine, valvetrain, injector, lifter, belt, pulley, exhaust leak, or knock.
+- If selected area is wheel area, prioritize speed-linked wheel bearing, tire, hub, brake drag, CV axle, or suspension noise.
+- If selected area is under car or exhaust, prioritize exhaust leak, heat shield, flex pipe, catalytic converter shield, loose bracket, or driveline vibration.
+- If sound follows RPM, raise engine-side causes.
+- If sound follows vehicle speed, raise wheel/drivetrain causes.
+- If braking changes the sound, raise brake causes.
+- If sound is fast ticking from engine bay, raise injector tick, lifter tap, valve train tick, or small exhaust leak.
+- If sound is deep metallic knock from engine bay, raise internal knock, flexplate, pulley impact, or engine mount movement.
+- If sound is squeal/chirp, raise belt, tensioner, idler pulley, alternator pulley, or A/C pulley.
+- If sound is scraping/grinding, raise brake, dust shield, rotor/pad contact, pulley contact, or metal rubbing.
 
-Reasoning style:
-Write like a calm senior mechanic explaining the sound to a driver.
-Be specific, practical, and safety-aware.
+Style:
+Write like a calm senior mechanic.
+Be specific.
 No markdown bullets.
 No confidence percentage.
 
@@ -189,7 +199,7 @@ ${outputFormat}
 
 async function requestAudioDiagnosis({ prompt, audioBase64, audioFormat }) {
   try {
-    const response = await fetch("https://api.openai.com/v1/responses", {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -197,11 +207,14 @@ async function requestAudioDiagnosis({ prompt, audioBase64, audioFormat }) {
       },
       body: JSON.stringify({
         model: process.env.DRIVESHIFT_AUDIO_MODEL || "gpt-4o-audio-preview",
-        input: [
+        messages: [
           {
             role: "user",
             content: [
-              { type: "input_text", text: prompt },
+              {
+                type: "text",
+                text: prompt,
+              },
               {
                 type: "input_audio",
                 input_audio: {
@@ -213,298 +226,36 @@ async function requestAudioDiagnosis({ prompt, audioBase64, audioFormat }) {
           },
         ],
         temperature: 0.05,
-        max_output_tokens: 1200,
+        max_tokens: 1200,
       }),
     });
 
-   if (!response.ok) {
-  const errorText = await response.text();
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.log("OPENAI AUDIO ERROR:", response.status, errorText);
+      return "";
+    }
 
-  console.log(
-    "OPENAI AUDIO ERROR:",
-    response.status,
-    errorText
-  );
+    const data = await response.json();
+    console.log("OPENAI AUDIO RESPONSE:", JSON.stringify(data, null, 2));
 
-  return "";
-}
-
-const data = await response.json();
-
-console.log(
-  "OPENAI AUDIO RESPONSE:",
-  JSON.stringify(data, null, 2)
-);
-
-return extractText(data);
-  } catch (_) {
+    return data?.choices?.[0]?.message?.content || "";
+  } catch (error) {
+    console.log("OPENAI AUDIO REQUEST FAILED:", error);
     return "";
   }
-}
-
-function analyzeAudioSignal({ audioBase64, audioFormat, durationSeconds }) {
-  try {
-    if (normalizeAudioFormat(audioFormat) !== "wav") {
-      return {
-        available: false,
-        note: "Local signal metrics skipped because the file is not WAV.",
-      };
-    }
-
-    const decoded = decodeWavPcm16(audioBase64);
-    if (!decoded) {
-      return {
-        available: false,
-        note: "Could not decode WAV PCM audio.",
-      };
-    }
-
-    const { samples, sampleRate } = decoded;
-    const maxSamples = Math.min(samples.length, sampleRate * 10);
-    const segment = samples.slice(0, maxSamples);
-
-    let sumSq = 0;
-    let peak = 0;
-    let zeroCrossings = 0;
-
-    for (let i = 0; i < segment.length; i++) {
-      const v = segment[i];
-      sumSq += v * v;
-      peak = Math.max(peak, Math.abs(v));
-
-      if (i > 0) {
-        const p = segment[i - 1];
-        if ((p >= 0 && v < 0) || (p < 0 && v >= 0)) zeroCrossings++;
-      }
-    }
-
-    const rms = Math.sqrt(sumSq / Math.max(1, segment.length));
-    const zcr = zeroCrossings / Math.max(1, segment.length);
-    const envelope = buildEnvelope(segment, sampleRate);
-    const pulse = analyzePulseEnvelope(
-      envelope,
-      Number(durationSeconds || segment.length / sampleRate || 0)
-    );
-    const spectral = analyzeSpectralBands(segment, sampleRate);
-
-    const hints = [];
-
-    if (rms < 0.012) hints.push("very quiet recording");
-    else if (rms < 0.035) hints.push("quiet but usable recording");
-    else hints.push("usable recording strength");
-
-    if (peak > 0.75) hints.push("strong peaks or possible clipping");
-    if (pulse.pulseRate >= 3 && pulse.pulseRate <= 18) {
-      hints.push("repeating rhythmic pulse detected");
-    }
-    if (spectral.lowRatio > 0.45) hints.push("low-frequency mechanical energy");
-    if (spectral.highRatio > 0.35) hints.push("high-frequency squeal/hiss texture");
-    if (spectral.midHighRatio > 0.5) hints.push("mid/high ticking or metallic texture");
-
-    return {
-      available: true,
-      sampleRate,
-      duration: round(durationSeconds || segment.length / sampleRate),
-      rms: round(rms),
-      peak: round(peak),
-      zcr: round(zcr),
-      pulseRate: round(pulse.pulseRate),
-      pulseRegularity: round(pulse.regularity),
-      lowRatio: round(spectral.lowRatio),
-      midRatio: round(spectral.midRatio),
-      highRatio: round(spectral.highRatio),
-      midHighRatio: round(spectral.midHighRatio),
-      hints,
-    };
-  } catch (_) {
-    return {
-      available: false,
-      note: "Local signal analysis failed safely.",
-    };
-  }
-}
-
-function decodeWavPcm16(audioBase64) {
-  const buffer = Buffer.from(audioBase64, "base64");
-
-  if (buffer.length < 44) return null;
-  if (buffer.toString("ascii", 0, 4) !== "RIFF") return null;
-  if (buffer.toString("ascii", 8, 12) !== "WAVE") return null;
-
-  let offset = 12;
-  let audioFormat = null;
-  let channels = null;
-  let sampleRate = null;
-  let bitsPerSample = null;
-  let dataOffset = null;
-  let dataSize = null;
-
-  while (offset + 8 <= buffer.length) {
-    const id = buffer.toString("ascii", offset, offset + 4);
-    const size = buffer.readUInt32LE(offset + 4);
-    const start = offset + 8;
-
-    if (id === "fmt ") {
-      audioFormat = buffer.readUInt16LE(start);
-      channels = buffer.readUInt16LE(start + 2);
-      sampleRate = buffer.readUInt32LE(start + 4);
-      bitsPerSample = buffer.readUInt16LE(start + 14);
-    }
-
-    if (id === "data") {
-      dataOffset = start;
-      dataSize = size;
-      break;
-    }
-
-    offset = start + size + (size % 2);
-  }
-
-  if (!dataOffset || !dataSize) return null;
-  if (audioFormat !== 1 || bitsPerSample !== 16 || !channels) return null;
-
-  const samples = [];
-  const frameSize = channels * 2;
-  const frames = Math.floor(dataSize / frameSize);
-
-  for (let i = 0; i < frames; i++) {
-    const frameOffset = dataOffset + i * frameSize;
-    let mixed = 0;
-
-    for (let ch = 0; ch < channels; ch++) {
-      mixed += buffer.readInt16LE(frameOffset + ch * 2) / 32768;
-    }
-
-    samples.push(mixed / channels);
-  }
-
-  return { samples, sampleRate };
-}
-
-function buildEnvelope(samples, sampleRate) {
-  const frameSize = Math.max(256, Math.floor(sampleRate * 0.04));
-  const envelope = [];
-
-  for (let i = 0; i < samples.length; i += frameSize) {
-    let sum = 0;
-    let count = 0;
-
-    for (let j = i; j < Math.min(samples.length, i + frameSize); j++) {
-      sum += samples[j] * samples[j];
-      count++;
-    }
-
-    envelope.push(Math.sqrt(sum / Math.max(1, count)));
-  }
-
-  return envelope;
-}
-
-function analyzePulseEnvelope(envelope, durationSeconds) {
-  if (!envelope.length || !durationSeconds) {
-    return { pulseRate: 0, regularity: 0 };
-  }
-
-  const avg =
-    envelope.reduce((sum, value) => sum + value, 0) /
-    Math.max(1, envelope.length);
-
-  const threshold = avg * 1.45;
-  const peaks = [];
-
-  for (let i = 1; i < envelope.length - 1; i++) {
-    if (
-      envelope[i] > threshold &&
-      envelope[i] > envelope[i - 1] &&
-      envelope[i] >= envelope[i + 1]
-    ) {
-      peaks.push(i);
-    }
-  }
-
-  const pulseRate = peaks.length / Math.max(1, durationSeconds);
-
-  let regularity = 0;
-  if (peaks.length >= 3) {
-    const gaps = [];
-
-    for (let i = 1; i < peaks.length; i++) {
-      gaps.push(peaks[i] - peaks[i - 1]);
-    }
-
-    const mean = gaps.reduce((s, g) => s + g, 0) / gaps.length;
-    const variance =
-      gaps.reduce((s, g) => s + Math.pow(g - mean, 2), 0) / gaps.length;
-
-    const std = Math.sqrt(variance);
-    regularity = mean > 0 ? Math.max(0, 1 - std / mean) : 0;
-  }
-
-  return { pulseRate, regularity };
-}
-
-function analyzeSpectralBands(samples, sampleRate) {
-  const targetLength = Math.min(samples.length, 12000);
-  const step = Math.max(1, Math.floor(samples.length / targetLength));
-  const segment = [];
-
-  for (let i = 0; i < samples.length && segment.length < targetLength; i += step) {
-    segment.push(samples[i]);
-  }
-
-  const adjustedRate = sampleRate / step;
-  const low = goertzelEnergy(segment, adjustedRate, 90) +
-    goertzelEnergy(segment, adjustedRate, 160);
-
-  const mid = goertzelEnergy(segment, adjustedRate, 350) +
-    goertzelEnergy(segment, adjustedRate, 800) +
-    goertzelEnergy(segment, adjustedRate, 1400);
-
-  const high = goertzelEnergy(segment, adjustedRate, 2600) +
-    goertzelEnergy(segment, adjustedRate, 4200) +
-    goertzelEnergy(segment, adjustedRate, 6500);
-
-  const total = low + mid + high || 1;
-
-  return {
-    lowRatio: low / total,
-    midRatio: mid / total,
-    highRatio: high / total,
-    midHighRatio: (mid + high) / total,
-  };
-}
-
-function goertzelEnergy(samples, sampleRate, targetFreq) {
-  const n = samples.length;
-  if (!n || targetFreq >= sampleRate / 2) return 0;
-
-  const k = Math.round((n * targetFreq) / sampleRate);
-  const omega = (2 * Math.PI * k) / n;
-  const coeff = 2 * Math.cos(omega);
-
-  let q0 = 0;
-  let q1 = 0;
-  let q2 = 0;
-
-  for (const sample of samples) {
-    q0 = coeff * q1 - q2 + sample;
-    q2 = q1;
-    q1 = q0;
-  }
-
-  return q1 * q1 + q2 * q2 - coeff * q1 * q2;
 }
 
 function cleanAndFinalize({ text, mode, lang }) {
   let clean = String(text || "").trim();
 
-if (!clean || clean.length < 40) {
-  if (mode === "follow_up") {
-    return buildEmergencyFollowUp(lang);
-  }
+  if (!clean || clean.length < 40) {
+    if (mode === "follow_up") {
+      return buildEmergencyFollowUp(lang);
+    }
 
-  return buildSafeErrorResponse(lang);
-}
+    return buildSafeErrorResponse(lang);
+  }
 
   clean = clean
     .replace(/\*\*/g, "")
@@ -514,26 +265,26 @@ if (!clean || clean.length < 40) {
     .trim();
 
   if (mode === "follow_up") {
-    if (!/Diagnosis status:\s*audio_follow_up/i.test(clean)) {
-      clean = `Diagnosis status: audio_follow_up\n\n${clean}`;
-    }
-
     clean = clean.replace(
       /Diagnosis status:\s*(follow_up|analysis|final|audio_follow_up)/i,
       "Diagnosis status: audio_follow_up"
     );
 
-    return clean;
-  }
+    if (!/Diagnosis status:\s*audio_follow_up/i.test(clean)) {
+      clean = `Diagnosis status: audio_follow_up\n\n${clean}`;
+    }
 
-  if (!/Diagnosis status:/i.test(clean)) {
-    clean = `Diagnosis status: analysis\n\n${clean}`;
+    return clean.trim();
   }
 
   clean = clean.replace(
     /Diagnosis status:\s*(follow_up|audio_follow_up|final|analysis)/i,
     "Diagnosis status: analysis"
   );
+
+  if (!/Diagnosis status:/i.test(clean)) {
+    clean = `Diagnosis status: analysis\n\n${clean}`;
+  }
 
   if (/Answer options:/i.test(clean)) {
     clean = clean.replace(
@@ -547,35 +298,13 @@ if (!clean || clean.length < 40) {
   return clean.trim();
 }
 
-function extractText(data) {
-  try {
-    if (data.output_text) return data.output_text;
-
-    if (Array.isArray(data.output)) {
-      return data.output
-        .flatMap((item) => item.content || [])
-        .map((content) => content.text || "")
-        .join("\n")
-        .trim();
-    }
-
-    return "";
-  } catch (_) {
-    return "";
-  }
-}
-
 function normalizeAudioFormat(format) {
   const f = String(format || "").toLowerCase().trim();
 
   if (f.includes("wav")) return "wav";
   if (f.includes("mp3")) return "mp3";
-  if (f.includes("webm")) return "webm";
-  if (f.includes("mp4")) return "mp4";
-  if (f.includes("m4a")) return "m4a";
-  if (f.includes("aac")) return "m4a";
 
-  return "m4a";
+  return "wav";
 }
 
 function buildVehicleText(profile) {
@@ -604,23 +333,60 @@ function buildAnswersText(answers) {
     .join("\n");
 }
 
-function formatSignal(signal) {
-  if (!signal?.available) {
-    return signal?.note || "No local signal metrics available.";
+function buildEmergencyFollowUp(lang) {
+  if (lang === "es") {
+    return `Diagnosis status: audio_follow_up
+
+Voice summary:
+Escuché el sonido del vehículo y voy a confirmar dos detalles para cerrar el diagnóstico.
+
+Audio direction:
+Engine-side sound behavior needs confirmation.
+
+Question 1:
+¿El sonido cambia más con RPM o con movimiento del vehículo?
+
+Answer options 1:
+RPM
+Velocidad
+Freno
+Giro
+
+Question 2:
+¿Qué carácter se parece más al sonido grabado?
+
+Answer options 2:
+Tick rápido
+Golpe profundo
+Chirrido
+Rattle metálico`;
   }
 
-  return `
-RMS: ${signal.rms}
-Peak: ${signal.peak}
-Zero crossing rate: ${signal.zcr}
-Pulse rate: ${signal.pulseRate}
-Pulse regularity: ${signal.pulseRegularity}
-Low frequency ratio: ${signal.lowRatio}
-Mid frequency ratio: ${signal.midRatio}
-High frequency ratio: ${signal.highRatio}
-Mid/high ratio: ${signal.midHighRatio}
-Hints: ${signal.hints.join(", ")}
-`.trim();
+  return `Diagnosis status: audio_follow_up
+
+Voice summary:
+I heard the vehicle sound and need two quick confirmations before the final diagnosis.
+
+Audio direction:
+Engine-side sound behavior needs confirmation.
+
+Question 1:
+Does the sound change more with RPM or vehicle movement?
+
+Answer options 1:
+RPM
+Speed
+Braking
+Turning
+
+Question 2:
+Which character best matches the recorded sound?
+
+Answer options 2:
+Fast ticking
+Deep knock
+Belt squeal
+Metallic rattle`;
 }
 
 function buildNoAudioResponse(lang) {
@@ -688,7 +454,7 @@ function buildSafeErrorResponse(lang) {
     return `Diagnosis status: analysis
 
 Voice summary:
-No pude completar el análisis de sonido en este intento.
+The sound was received, but the final audio analysis did not complete.
 
 Risk level:
 Medium
@@ -699,13 +465,13 @@ Secondary possibility: Unsupported audio format
 Less likely: Confirmed mechanical failure from this attempt
 
 Why it fits:
-The audio could not be processed reliably in this request.
+The recording reached the backend, but the audio model did not return a final diagnostic response.
 
 What to inspect next:
-Try again with a clear 7 to 10 second recording near the sound source.
+Try the scan again once. If the sound is engine-side, compare whether it follows RPM, cold start, idle, or acceleration.
 
 What to do next:
-Record again and avoid speaking during the recording.
+Repeat the scan with 7 to 10 seconds near the sound source.
 
 Answer options:
 None
@@ -717,7 +483,7 @@ Deja de manejar si el sonido se vuelve fuerte, metálico, aparece humo, olor a q
   return `Diagnosis status: analysis
 
 Voice summary:
-I could not complete the sound analysis on this attempt.
+The sound was received, but the final audio analysis did not complete.
 
 Risk level:
 Medium
@@ -728,76 +494,17 @@ Secondary possibility: Unsupported audio format
 Less likely: Confirmed mechanical failure from this attempt
 
 Why it fits:
-The audio could not be processed reliably in this request.
+The recording reached the backend, but the audio model did not return a final diagnostic response.
 
 What to inspect next:
-Try again with a clear 7 to 10 second recording near the sound source.
+Try the scan again once. If the sound is engine-side, compare whether it follows RPM, cold start, idle, or acceleration.
 
 What to do next:
-Record again and avoid speaking during the recording.
+Repeat the scan with 7 to 10 seconds near the sound source.
 
 Answer options:
 None
 
 When to stop driving:
 Stop driving if the sound becomes loud, metallic, smoke appears, you smell burning, the engine overheats, power drops, or a red warning light comes on.`;
-}
-
-function round(value) {
-  return Math.round(Number(value || 0) * 1000) / 1000;
-}
-function buildEmergencyFollowUp(lang) {
-  if (lang === "es") {
-    return `Diagnosis status: audio_follow_up
-
-Voice summary:
-El sonido fue recibido. Necesito dos detalles rápidos para cerrar el diagnóstico.
-
-Audio direction:
-Sound received and ready for scanner questions.
-
-Question 1:
-¿El sonido cambia más con RPM, velocidad, freno o giro?
-
-Answer options 1:
-RPM
-Velocidad
-Freno
-Giro
-
-Question 2:
-¿Cómo describirías el sonido?
-
-Answer options 2:
-Golpe
-Tick rápido
-Chirrido
-Grinding`;
-  }
-
-  return `Diagnosis status: audio_follow_up
-
-Voice summary:
-The sound was received. I need two quick scanner details before the final diagnosis.
-
-Audio direction:
-Sound received and ready for scanner questions.
-
-Question 1:
-What changes the sound the most?
-
-Answer options 1:
-RPM
-Speed
-Braking
-Turning
-
-Question 2:
-How would you describe the sound?
-
-Answer options 2:
-Deep knock
-Fast ticking
-Belt squeal
-Grinding`;
 }
