@@ -1567,27 +1567,24 @@ function buildFastAnalysis({
     Array.isArray(dominantSignals) ? dominantSignals.join(" ") : "",
     diagnosticIdentity?.label || "",
     String(obdInsight || ""),
-  ]
-    .join(" ")
-    .toLowerCase();
+  ].join(" ").toLowerCase();
 
   const hasObd = Boolean(obdCode);
-  const hasBrake = includesAny(text, [
-    "brake",
-    "braking",
-    "rotor",
-    "pedal",
-    "steering wheel",
-    "vibration",
-  ]);
-  const hasOverheat = includesAny(text, [
+
+  const risk = includesAny(text, [
     "overheat",
+    "overheating",
     "coolant",
     "steam",
-    "temperature",
-  ]);
-
-  const risk = hasOverheat || hasBrake ? "High" : "Medium";
+    "brake failure",
+    "no brakes",
+    "pedal soft",
+    "burning smell",
+    "smoke",
+    "red warning",
+  ])
+    ? "High"
+    : "Medium";
 
   const ranking =
     localRanking ||
@@ -1601,6 +1598,49 @@ function buildFastAnalysis({
       diagnosticIdentity,
     });
 
+  const isEngineTick =
+    diagnosticIdentity?.key === "engine_ticking_identity" ||
+    includesAny(text, [
+      "engine-side ticking",
+      "ticking",
+      "tick",
+      "lifter",
+      "valvetrain",
+      "injector",
+      "rocker",
+      "cam follower",
+    ]);
+
+  if (isEngineTick && !hasObd) {
+    return `Diagnosis status: analysis
+
+Voice summary:
+This behaves more like an engine-side mechanical tick than a brake, wheel, ignition, or fuel-delivery problem.
+
+Risk level:
+${risk}
+
+Likely issue:
+Most likely: Upper engine-side ticking: injector pulse, lifter tap, valvetrain tick, rocker/cam follower noise, pulley/tensioner tick, or a small exhaust tick.
+Secondary possibility: Small exhaust leak near the manifold or an accessory/pulley-related tick.
+Less likely: Ignition misfire, fuel delivery, brake, or wheel issue unless new evidence appears such as misfire codes, flashing check engine light, strong power loss, harsh shaking, braking symptoms, or speed-linked wheel noise.
+
+Why it fits:
+The dominant symptom is a ticking sound from the engine area. A tick that changes with RPM or remains clear at idle usually comes from parts moving with engine speed. Injector pulse can create a sharp regular tick. A lifter, rocker arm, cam follower, or valvetrain component can sound similar when lubrication, clearance, or wear is involved. A small exhaust leak near the manifold can also create a tick, but it often changes more with heat or load. Without a misfire code, flashing check engine light, harsh shaking, or major power loss, ignition or fuel delivery should not outrank the mechanical ticking direction.
+
+What to inspect next:
+Start by pinpointing the sound with a mechanic’s stethoscope or sound probe. Compare the fuel rail and injectors, valve cover area, belt tensioner, idler pulleys, alternator, and exhaust manifold. Check oil level and condition. Listen for one injector louder than the others. Look for exhaust soot near the manifold. If the tick is strongest under the valve cover, inspect lifters, rocker arms, cam followers, and top-end lubrication.
+
+What to do next:
+Drive gently until the source is confirmed. If the tick is light, regular, and stable, inspect it soon without panic. If it becomes deeper, louder, metallic, or comes with oil pressure warning, power loss, smoke, or a red warning light, stop driving and inspect it before continuing.
+
+Answer options:
+None
+
+When to stop driving:
+Stop driving if the tick turns into a deep metallic knock, oil pressure drops, smoke appears, you smell burning, power drops strongly, the engine overheats, or a red warning light comes on.`;
+  }
+
   const likely = hasObd
     ? `Most likely: ${obdInsight || `OBD-related fault ${obdCode}`}
 Secondary possibility: ${ranking.secondary}
@@ -1609,38 +1649,10 @@ Less likely: ${ranking.lessLikely}`
 Secondary possibility: ${ranking.secondary}
 Less likely: ${ranking.lessLikely}`;
 
-  if (isEs) {
-    return `Diagnosis status: analysis
-
-Voice summary:
-DriveShift encontró una dirección probable y la ordenó por fuerza de evidencia.
-
-Risk level:
-${risk}
-
-Likely issue:
-${likely}
-
-Why it fits:
-El patrón principal y las señales dominantes apuntan primero a la causa más fuerte. Las otras posibilidades quedan secundarias hasta que una inspección o datos OBD cambien la dirección.
-
-What to inspect next:
-Primero confirma la causa principal con códigos OBD, datos en vivo, inspección visual, conectores, fugas, olores, vibración y comportamiento bajo carga o frenado. Después revisa la posibilidad secundaria.
-
-What to do next:
-Evita manejar fuerte hasta confirmar la causa. Haz una prueba controlada o una inspección profesional antes de cambiar piezas.
-
-Answer options:
-None
-
-When to stop driving:
-Deja de manejar si el auto se siente inseguro, se sobrecalienta, huele a quemado, pierde mucha potencia, vibra fuerte, o aparece una luz roja.`;
-  }
-
   return `Diagnosis status: analysis
 
 Voice summary:
-DriveShift found a likely direction and ranked it by evidence strength.
+The pattern points first toward ${ranking.mostLikely}.
 
 Risk level:
 ${risk}
@@ -1649,21 +1661,20 @@ Likely issue:
 ${likely}
 
 Why it fits:
-The dominant symptom pattern points first toward the highest-ranked cause. The other possibilities remain secondary unless inspection or OBD data shifts the direction.
+The main symptom and the user’s answers point first toward the strongest mechanical direction. The secondary possibilities stay behind it unless inspection, OBD data, live data, or a controlled test changes the direction.
 
 What to inspect next:
-Confirm the top-ranked cause first with stored codes, live data, visual inspection, connectors, leaks, smells, vibration behavior, and behavior under load or braking. Then check the secondary possibility.
+Start with the system most connected to the leading cause. Confirm it with stored codes, live data, visual inspection, connectors, leaks, smells, sound location, vibration behavior, and how the symptom changes under load, braking, idle, speed, or temperature.
 
 What to do next:
-Avoid hard driving until the cause is confirmed. Use a controlled test or professional inspection before replacing parts.
+Avoid hard driving until the cause is confirmed. Use an ordered inspection before replacing parts, starting with the most likely system first.
 
 Answer options:
 None
 
 When to stop driving:
-Stop driving if the car feels unsafe, overheats, smells like burning, loses strong power, shakes badly, or shows a red warning light.`;
+Stop driving if the vehicle feels unsafe, overheats, smells like burning, loses strong power, shakes badly, makes heavy grinding noise, or shows a red warning light.`;
 }
-
 function cleanAndFinalize(text, lang) {
   let clean = String(text || "").trim();
 
