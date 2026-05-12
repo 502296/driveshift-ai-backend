@@ -43,7 +43,7 @@ Diagnostic reasoning rules:
 const RANKING_ENGINE_RULES = `
 Dominant Cause Ranking rules:
 - Always rank the strongest likely cause first.
-- Use the user's symptom pattern, answers, OBD insight, dominant symptom lock, compound pattern memory, and safety signals as evidence.
+- Use the user's symptom pattern, answers, OBD insight, dominant symptom lock, diagnostic identity lock, compound pattern memory, and safety signals as evidence.
 - Do not flatten all causes as equal.
 - Avoid weak phrases like "could be many things" unless evidence is truly missing.
 - Use technician language such as:
@@ -66,42 +66,19 @@ Pattern Memory rules:
 - A red warning light, flashing check engine light, brake issue, fuel smell, burning smell, or overheating must raise safety awareness.
 - When a pattern matches, explain why that combination matters.
 `;
+
 const MECHANICAL_WHY_RULES = `
-
 Mechanical explanation rules:
-
 - Do not only say WHAT the likely issue is.
 - Explain WHY the symptom pattern mechanically points there.
-
 - Use real technician reasoning.
-
-- Explain why:
-  - heat changes the symptom
-  - load changes the symptom
-  - braking changes the symptom
-  - idle changes the symptom
-  - cold start changes the symptom
-  - speed changes the symptom
-
+- Explain why heat, load, braking, idle, cold start, speed, RPM, or vibration changes the symptom.
 - Explain what physically or mechanically changes.
-
-Examples:
-
-- Heat can expand rotors, weaken ignition components, thin fluid, or increase resistance.
-- Heavy load increases cylinder pressure and fuel demand, exposing weak ignition or fuel delivery.
-- Brake vibration during braking points more toward rotor/hub runout than simple tire balance.
-- Cold-start issues may involve enrichment, weak battery voltage, or sensor warm-up behavior.
-- Vacuum leaks often affect idle more than heavy acceleration.
-- Misfires under heavy load happen because cylinder pressure is harder to ignite.
-
-- When explaining:
-  - sound like a real technician
-  - avoid robotic textbook language
-  - keep explanations concise but intelligent
-
+- When explaining, sound like a real technician.
+- Avoid robotic textbook language.
+- Keep explanations concise but intelligent.
 - Do not repeat generic phrases.
 - Tie the explanation directly to THIS symptom pattern.
-
 `;
 
 const REPORT_ENGINE = `
@@ -110,7 +87,7 @@ Report rules:
 - Do not ask another question.
 - Do not output follow_up.
 - Answer options must be None.
-- Keep sections concise, specific, and useful.
+- Keep sections specific and useful.
 - Always include "What to inspect next".
 - The "Likely issue" section must include ranked thinking:
   Most likely:
@@ -284,7 +261,8 @@ const STRONG_PATTERNS = [
     prioritize: [
       {
         key: "wheel_tire_suspension",
-        label: "Wheel balance, tire defect, bent wheel, hub runout, or front suspension looseness",
+        label:
+          "Wheel balance, tire defect, bent wheel, hub runout, or front suspension looseness",
         boost: 42,
         evidence:
           "vibration at steady highway speed points first toward rotating wheel, tire, hub, or suspension issues",
@@ -369,14 +347,16 @@ const STRONG_PATTERNS = [
     prioritize: [
       {
         key: "starting_system",
-        label: "Weak battery, voltage drop, starter motor, relay, or main power connection fault",
+        label:
+          "Weak battery, voltage drop, starter motor, relay, or main power connection fault",
         boost: 50,
         evidence:
           "clicking or no-crank behavior separates starter/battery power faults from crank-no-start faults",
       },
       {
         key: "electrical_power",
-        label: "Main power cable, ground, fuse, ignition switch signal, or relay issue",
+        label:
+          "Main power cable, ground, fuse, ignition switch signal, or relay issue",
         boost: 28,
         evidence:
           "no-crank conditions often require voltage-drop and control-circuit checks",
@@ -398,7 +378,8 @@ const STRONG_PATTERNS = [
     prioritize: [
       {
         key: "crank_no_start_path",
-        label: "Crank-no-start path: fuel delivery, spark, injector pulse, compression, or immobilizer",
+        label:
+          "Crank-no-start path: fuel delivery, spark, injector pulse, compression, or immobilizer",
         boost: 48,
         evidence:
           "engine cranking separates this from starter/battery faults and moves diagnosis toward fuel, spark, injector pulse, compression, or security",
@@ -406,6 +387,118 @@ const STRONG_PATTERNS = [
     ],
   },
 ];
+
+function detectDiagnosticIdentity(issue, answers = []) {
+  const text = buildCombinedText(issue, answers);
+
+  const hasTick = includesAny(text, [
+    "tick",
+    "ticking",
+    "tap",
+    "tapping",
+    "lifter",
+    "valvetrain",
+    "valve train",
+    "injector tick",
+  ]);
+
+  const hasEngineArea = includesAny(text, [
+    "engine",
+    "engine bay",
+    "under hood",
+    "idle",
+    "rpm",
+    "rev",
+    "acceleration",
+    "accelerating",
+    "light acceleration",
+  ]);
+
+  const hasRpmBehavior = includesAny(text, [
+    "rpm",
+    "rev",
+    "revs",
+    "faster with rpm",
+    "gets faster",
+    "light acceleration",
+    "accelerating",
+  ]);
+
+  const hasTrueMisfireEvidence = includesAny(text, [
+    "misfire code",
+    "p0300",
+    "p0301",
+    "p0302",
+    "p0303",
+    "p0304",
+    "flashing check engine",
+    "check engine light flashes",
+    "rough shaking",
+    "strong power loss",
+  ]);
+
+  if (hasTick && hasEngineArea) {
+    return {
+      key: "engine_ticking_identity",
+      label:
+        "Engine-side ticking identity: injector pulse, lifter tap, valvetrain tick, small exhaust tick, pulley/tensioner tick, or top-end mechanical noise",
+      rules: [
+        "Keep ticking as the dominant symptom.",
+        "Do not convert this into a brake, wheel, or fuel-delivery diagnosis.",
+        "Do not rank ignition misfire first unless there is direct misfire evidence such as P0300/P030x, flashing check engine light, rough shaking, or strong power loss.",
+        "If RPM or acceleration is mentioned, treat it as engine-speed behavior, not automatically ignition breakdown.",
+        "Prioritize injector tick, lifter tap, valve train tick, rocker/cam follower noise, pulley/tensioner tick, or small exhaust leak near the manifold.",
+      ],
+      evidence: [
+        "The user described a ticking/tapping sound.",
+        hasRpmBehavior
+          ? "The sound appears connected to RPM, idle, or light acceleration."
+          : "The sound is described around engine operating conditions.",
+        hasTrueMisfireEvidence
+          ? "Some misfire evidence may exist, but it must compete with the ticking identity."
+          : "No strong direct misfire evidence was provided.",
+      ],
+      suppress: ["brake_system", "wheel_tire_suspension", "fuel_delivery"],
+    };
+  }
+
+  if (includesAny(text, ["deep knock", "knocking", "rod knock"])) {
+    return {
+      key: "engine_knock_identity",
+      label:
+        "Engine knock identity: internal knock, pulley impact, flexplate noise, mount movement, or lower mechanical impact",
+      rules: [
+        "Keep knock as the dominant symptom.",
+        "Do not dilute it into general drivability unless direct evidence supports that.",
+        "Treat deep metallic knock with higher safety concern than light ticking.",
+      ],
+      evidence: ["The user described knock/knocking behavior."],
+      suppress: ["brake_system", "wheel_tire_suspension"],
+    };
+  }
+
+  if (includesAny(text, ["squeal", "chirp", "belt squeal"])) {
+    return {
+      key: "belt_squeal_identity",
+      label:
+        "Belt or accessory-drive squeal identity: belt slip, weak tensioner, idler pulley, alternator pulley, or A/C pulley",
+      rules: [
+        "Keep squeal/chirp as the dominant symptom.",
+        "Prioritize belt and pulley behavior before unrelated systems.",
+      ],
+      evidence: ["The user described squeal/chirp behavior."],
+      suppress: ["brake_system", "fuel_delivery"],
+    };
+  }
+
+  return {
+    key: "general_identity",
+    label: "No narrow diagnostic identity lock detected.",
+    rules: [],
+    evidence: [],
+    suppress: [],
+  };
+}
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -446,6 +539,7 @@ export default async function handler(req, res) {
 
     const realAnswerCount = countUserAnswers(answerList);
     const dominantSignals = detectDominantSignals(safeIssue, answerList);
+    const diagnosticIdentity = detectDiagnosticIdentity(safeIssue, answerList);
 
     const patternMemory = applyPatternMemory({
       issue: safeIssue,
@@ -453,6 +547,7 @@ export default async function handler(req, res) {
       dominantSignals,
       obdCode,
       obdInsight,
+      diagnosticIdentity,
     });
 
     const localRanking = buildDominantCauseRanking({
@@ -462,6 +557,7 @@ export default async function handler(req, res) {
       obdCode,
       obdInsight,
       patternMemory,
+      diagnosticIdentity,
     });
 
     const complexity = detectComplexity(safeIssue, dominantSignals, answerList);
@@ -502,6 +598,7 @@ export default async function handler(req, res) {
       answers: answerList,
       vehicleProfile: profile,
       dominantSignals,
+      diagnosticIdentity,
       localRanking,
       patternMemory,
       complexity,
@@ -524,6 +621,7 @@ export default async function handler(req, res) {
           lang,
           issue: safeIssue,
           dominantSignals,
+          diagnosticIdentity,
           localRanking,
           obdCode,
           obdInsight,
@@ -539,6 +637,7 @@ export default async function handler(req, res) {
         lang: "en",
         issue: "",
         dominantSignals: [],
+        diagnosticIdentity: null,
         localRanking: null,
         obdCode: "",
         obdInsight: "",
@@ -555,6 +654,17 @@ function buildSmartFollowUp({ lang, issue, answers }) {
     : "";
 
   const used = (keys) => keys.some((k) => asked.includes(k));
+
+  const hasEngineTick = includesAny(text, [
+    "tick",
+    "ticking",
+    "tap",
+    "tapping",
+    "lifter",
+    "injector tick",
+    "valvetrain",
+    "valve train",
+  ]);
 
   const hasHighway = includesAny(text, [
     "highway",
@@ -600,6 +710,24 @@ function buildSmartFollowUp({ lang, issue, answers }) {
   ]);
 
   const hasNoStart = isTrueNoStart(text);
+
+  if (hasEngineTick && !used(["rpm", "idle", "load", "warm"])) {
+    return followUpBlock({
+      isEs,
+      summary: isEs
+        ? "El tick del motor necesita confirmación por RPM e idle."
+        : "The engine-side tick needs confirmation by RPM and idle behavior.",
+      question: isEs
+        ? "¿Cuándo se nota más el tick: al acelerar, en idle, en frío o caliente?"
+        : "When is the ticking most noticeable: accelerating, at idle, cold, or warm?",
+      options: isEs
+        ? ["Acelerando", "En idle", "En frío", "Caliente"]
+        : ["Accelerating", "At idle", "Cold", "Warm"],
+      stop: isEs
+        ? "Deja de manejar si el tick se vuelve golpe metálico profundo, pierde potencia fuerte o aparece luz roja."
+        : "Stop driving if the tick turns into a deep metallic knock, power drops hard, or a red warning light appears.",
+    });
+  }
 
   if (hasVibration && hasHighway && !used(["steering", "seat", "floor", "pedal"])) {
     return followUpBlock({
@@ -707,6 +835,35 @@ function buildSecondFollowUp({ lang, issue, answers }) {
   const text = buildCombinedText(issue, answers);
 
   if (
+    includesAny(text, [
+      "tick",
+      "ticking",
+      "tap",
+      "tapping",
+      "lifter",
+      "injector tick",
+      "valvetrain",
+      "valve train",
+    ])
+  ) {
+    return followUpBlock({
+      isEs,
+      summary: isEs
+        ? "Ahora necesito separar tick normal de inyector de tick mecánico de tren de válvulas."
+        : "Now I need to separate normal injector tick from a mechanical top-end tick.",
+      question: isEs
+        ? "¿El tick cambia con RPM o se mantiene igual en idle?"
+        : "Does the tick change with RPM, or does it stay about the same at idle?",
+      options: isEs
+        ? ["Cambia con RPM", "Igual en idle", "Más fuerte en frío", "No sé"]
+        : ["Changes with RPM", "Same at idle", "Louder cold", "Not sure"],
+      stop: isEs
+        ? "Deja de manejar si cambia a golpe profundo, baja la presión de aceite o pierde potencia fuerte."
+        : "Stop driving if it turns into a deep knock, oil pressure drops, or power loss becomes strong.",
+    });
+  }
+
+  if (
     system === "engine_drivability" ||
     text.includes("misfire") ||
     text.includes("uphill") ||
@@ -798,6 +955,7 @@ function buildAnalysisPrompt({
   answers,
   vehicleProfile,
   dominantSignals,
+  diagnosticIdentity,
   localRanking,
   patternMemory,
   complexity,
@@ -862,6 +1020,23 @@ ${hasObdCode ? obdCode : "None"}
 Dominant symptom lock:
 ${dominantText}
 
+Diagnostic identity lock:
+${diagnosticIdentity?.label || "None"}
+
+Identity lock rules:
+${
+  diagnosticIdentity?.rules?.length
+    ? diagnosticIdentity.rules.join("\n")
+    : "No special identity lock rules."
+}
+
+Identity evidence:
+${
+  diagnosticIdentity?.evidence?.length
+    ? diagnosticIdentity.evidence.join("\n")
+    : "No identity evidence."
+}
+
 Local dominant cause ranking:
 ${rankingText}
 
@@ -887,6 +1062,7 @@ Do not output markdown tables.
 Do not include confidence percentage.
 Do not make all causes equal.
 Rank the causes like a senior technician.
+If diagnostic identity lock is active, protect that identity unless direct evidence strongly proves another system.
 If mechanic pattern memory matched, use it to keep the strongest pattern on top.
 Do not let a suppressed cause dominate unless the user gave direct evidence for it.
 Use decisive but safe language.
@@ -960,12 +1136,14 @@ function applyPatternMemory({
   dominantSignals,
   obdCode,
   obdInsight,
+  diagnosticIdentity,
 }) {
   const text = [
     buildCombinedText(issue, answers),
     Array.isArray(dominantSignals) ? dominantSignals.join(" ") : "",
     String(obdCode || ""),
     String(obdInsight || ""),
+    diagnosticIdentity?.label || "",
   ]
     .join(" ")
     .toLowerCase();
@@ -1023,12 +1201,14 @@ function buildDominantCauseRanking({
   obdCode,
   obdInsight,
   patternMemory,
+  diagnosticIdentity,
 }) {
   const text = [
     buildCombinedText(issue, answers),
     Array.isArray(dominantSignals) ? dominantSignals.join(" ") : "",
     String(obdCode || ""),
     String(obdInsight || ""),
+    String(diagnosticIdentity?.label || ""),
   ]
     .join(" ")
     .toLowerCase();
@@ -1051,6 +1231,71 @@ function buildDominantCauseRanking({
       });
     }
   };
+
+  if (diagnosticIdentity?.key === "engine_ticking_identity") {
+    add(
+      "engine_ticking_top_end",
+      "Engine-side ticking: injector pulse, lifter tap, valvetrain tick, rocker/cam follower noise, pulley/tensioner tick, or small exhaust tick",
+      70,
+      "diagnostic identity lock detected engine-side ticking as the dominant symptom"
+    );
+
+    if (
+      includesAny(text, [
+        "rpm",
+        "rev",
+        "revs",
+        "gets faster",
+        "faster with rpm",
+        "accelerating",
+        "light acceleration",
+        "idle",
+      ])
+    ) {
+      add(
+        "engine_ticking_top_end",
+        "Engine-side ticking: injector pulse, lifter tap, valvetrain tick, rocker/cam follower noise, pulley/tensioner tick, or small exhaust tick",
+        35,
+        "ticking behavior is connected to engine speed, idle, or light acceleration"
+      );
+    }
+
+    if (
+      !includesAny(text, [
+        "misfire code",
+        "p0300",
+        "p0301",
+        "p0302",
+        "p0303",
+        "p0304",
+        "flashing check engine",
+        "check engine light flashes",
+        "rough shaking",
+        "strong power loss",
+      ])
+    ) {
+      add(
+        "ignition_misfire",
+        "Ignition misfire or spark breakdown under load",
+        -45,
+        "suppressed because ticking identity is stronger and no direct misfire evidence was given"
+      );
+
+      add(
+        "fuel_delivery",
+        "Fuel delivery weakness under demand",
+        -35,
+        "suppressed because fuel delivery should not outrank engine ticking without fuel pressure, lean/rich, or power-loss evidence"
+      );
+
+      add(
+        "brake_system",
+        "Brake rotor runout, pad issue, caliper drag, or brake hardware fault",
+        -60,
+        "suppressed because engine ticking identity does not support brake diagnosis"
+      );
+    }
+  }
 
   if (
     includesAny(text, [
@@ -1310,6 +1555,7 @@ function buildFastAnalysis({
   lang,
   issue,
   dominantSignals,
+  diagnosticIdentity,
   localRanking,
   obdCode,
   obdInsight,
@@ -1319,6 +1565,7 @@ function buildFastAnalysis({
   const text = [
     String(issue || ""),
     Array.isArray(dominantSignals) ? dominantSignals.join(" ") : "",
+    diagnosticIdentity?.label || "",
     String(obdInsight || ""),
   ]
     .join(" ")
@@ -1351,6 +1598,7 @@ function buildFastAnalysis({
       obdCode,
       obdInsight,
       patternMemory: null,
+      diagnosticIdentity,
     });
 
   const likely = hasObd
@@ -1468,6 +1716,7 @@ function ensureAnalysisFormat(text, lang) {
     lang,
     issue: "",
     dominantSignals: [],
+    diagnosticIdentity: null,
     localRanking: null,
     obdCode: "",
     obdInsight: "",
