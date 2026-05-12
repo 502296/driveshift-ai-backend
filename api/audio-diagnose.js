@@ -217,10 +217,26 @@ async function requestAudioDiagnosis({ prompt, audioBase64, audioFormat }) {
       }),
     });
 
-    if (!response.ok) return "";
+   if (!response.ok) {
+  const errorText = await response.text();
 
-    const data = await response.json();
-    return extractText(data);
+  console.log(
+    "OPENAI AUDIO ERROR:",
+    response.status,
+    errorText
+  );
+
+  return "";
+}
+
+const data = await response.json();
+
+console.log(
+  "OPENAI AUDIO RESPONSE:",
+  JSON.stringify(data, null, 2)
+);
+
+return extractText(data);
   } catch (_) {
     return "";
   }
