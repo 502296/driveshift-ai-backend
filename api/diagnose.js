@@ -1,8 +1,6 @@
 import {
   countUserAnswers,
   detectDominantSignals,
-  detectComplexity,
-  detectDiagnosticReadiness,
 } from "./helpers/diagnostic-core.js";
 
 import { detectSystem } from "./helpers/knowledge-router.js";
@@ -15,66 +13,43 @@ import {
 const REQUIRED_FOLLOW_UPS = 2;
 
 const DOCTOR_PROMPT = `
-You are DriveShift Doctor, a premium automotive diagnostic intelligence.
+You are DriveShift Doctor, a premium senior automotive diagnostic mechanic.
 
-You are not a chatbot.
-You speak like a calm senior diagnostic mechanic.
-
-Your job:
-- Understand the exact symptom pattern.
+Rules:
+- Do not sound like a chatbot.
 - Protect the dominant symptom.
-- Use the user's answers as evidence.
-- Rank real mechanical causes.
-- Never give vague filler.
+- Rank real components, not vague systems.
 - Never say "targeted inspection needed".
 - Never say "related electrical, sensor, mechanical, or fluid issue".
 - Never say "start with the system most connected".
-- Always name real vehicle systems and components.
-- Explain why the symptom mechanically points there.
-- Be decisive, practical, and safe without pretending certainty.
+- Explain WHY the symptom mechanically fits.
+- Use calm, practical mechanic language.
+- Do not mention AI, prompt, backend, or model.
+- Do not ask another question in analysis mode.
 
-Important:
-If the user gives flashing check engine light + fuel smell + jerking under load/uphill,
-the report must strongly consider:
-- ignition coil breakdown under load
-- spark plug misfire
-- cylinder misfire
-- unburned fuel from incomplete combustion
-- possible injector/fuel mixture issue
-- catalytic converter risk
-
-If the user gives ticking/tapping from engine area,
-the report must strongly consider:
-- injector tick
-- lifter tap
-- rocker arm / valvetrain tick
-- cam follower noise
-- small exhaust manifold leak
-- pulley/tensioner noise
-
-Output only this format:
+Output exactly:
 
 Diagnosis status: analysis
 
 Voice summary:
-[one short natural mechanic sentence specific to this case]
+[one short mechanic sentence]
 
 Risk level:
 [High or Medium or Low]
 
 Likely issue:
-Most likely: [specific strongest cause]
-Secondary possibility: [specific second cause]
-Less likely: [specific third cause]
+Most likely: [specific cause]
+Secondary possibility: [specific cause]
+Less likely: [specific cause]
 
 Why it fits:
-[specific explanation tied directly to the user's symptoms and answers]
+[specific mechanical explanation]
 
 What to inspect next:
 [specific ordered checks]
 
 What to do next:
-[driver-friendly next action]
+[driver-friendly next step]
 
 Answer options:
 None
@@ -83,270 +58,17 @@ When to stop driving:
 [specific safety advice]
 `;
 
-const STRONG_PATTERNS = [
-  {
-    name: "flashing_cel_fuel_smell_heavy_load",
-    triggers: [
-      "flashing check engine",
-      "check engine light flashes",
-      "cel flashes",
-      "flashes briefly",
-      "fuel smell",
-      "gas smell",
-      "raw fuel",
-      "smells like fuel",
-      "smells like gas",
-      "heavy load",
-      "under load",
-      "uphill",
-      "accelerating",
-      "jerks",
-      "jerking",
-      "hesitating",
-      "hesitates",
-      "loses power",
-      "loss of power",
-      "weak acceleration",
-      "rough under load",
-      "misfire code",
-    ],
-    minimumHits: 3,
-    prioritize: [
-      {
-        key: "ignition_misfire",
-        label: "Ignition coil breakdown, spark plug misfire, or cylinder misfire under heavy load",
-        boost: 70,
-        evidence:
-          "flashing check engine light with jerking under load strongly points toward active misfire",
-      },
-      {
-        key: "unburned_fuel",
-        label: "Unburned fuel from incomplete combustion during misfire",
-        boost: 50,
-        evidence:
-          "fuel smell fits raw fuel leaving the cylinder when combustion breaks down",
-      },
-      {
-        key: "injector_or_fuel_control",
-        label: "Leaking injector, rich mixture, or fuel control fault",
-        boost: 24,
-        evidence:
-          "fuel smell can also come from overfueling or injector leakage",
-      },
-      {
-        key: "catalyst_risk",
-        label: "Catalytic converter overheating risk from repeated misfire",
-        boost: 18,
-        evidence:
-          "flashing check engine light means catalyst damage risk is possible",
-      },
-    ],
-    suppress: [
-      {
-        key: "lean_condition",
-        reason:
-          "vacuum leak should not outrank misfire when flashing CEL, fuel smell, and load jerking are present",
-        penalty: 90,
-      },
-    ],
-  },
-  {
-    name: "black_smoke_fuel_smell_power_loss",
-    triggers: [
-      "black smoke",
-      "dark smoke",
-      "fuel smell",
-      "raw fuel",
-      "gas smell",
-      "smells like fuel",
-      "smells like gas",
-      "power loss",
-      "loses power",
-      "poor acceleration",
-    ],
-    minimumHits: 2,
-    prioritize: [
-      {
-        key: "rich_fuel_condition",
-        label: "Rich fuel condition, leaking injector, or fuel pressure regulation fault",
-        boost: 60,
-        evidence:
-          "black smoke with fuel smell strongly points toward overfueling",
-      },
-      {
-        key: "ignition_misfire",
-        label: "Ignition misfire leaving fuel unburned",
-        boost: 30,
-        evidence:
-          "misfire can leave raw fuel smell and reduce power",
-      },
-    ],
-  },
-  {
-    name: "brake_pedal_vibration",
-    triggers: [
-      "brake",
-      "braking",
-      "brake pedal",
-      "pedal vibration",
-      "pulsation",
-      "pulsing",
-      "rotor",
-      "stopping",
-      "vibration when braking",
-    ],
-    minimumHits: 2,
-    prioritize: [
-      {
-        key: "brake_system",
-        label: "Brake rotor runout, pad transfer, caliper drag, or hub runout",
-        boost: 60,
-        evidence:
-          "vibration tied to braking points first toward brake rotor, hub, or caliper behavior",
-      },
-    ],
-  },
-  {
-    name: "highway_vibration_not_braking",
-    triggers: [
-      "highway",
-      "freeway",
-      "interstate",
-      "high speed",
-      "65 mph",
-      "70 mph",
-      "steering wheel",
-      "seat",
-      "floor",
-      "vibration",
-      "shaking",
-      "wobble",
-    ],
-    minimumHits: 3,
-    prioritize: [
-      {
-        key: "wheel_tire_suspension",
-        label: "Wheel balance issue, tire defect, bent wheel, hub runout, or loose suspension component",
-        boost: 50,
-        evidence:
-          "steady-speed highway vibration usually comes from rotating wheel, tire, hub, or suspension parts",
-      },
-    ],
-  },
-  {
-    name: "overheat_coolant_loss",
-    triggers: [
-      "overheat",
-      "overheating",
-      "coolant loss",
-      "low coolant",
-      "coolant",
-      "steam",
-      "temperature light",
-      "temp gauge",
-      "coolant smell",
-    ],
-    minimumHits: 2,
-    prioritize: [
-      {
-        key: "cooling_system",
-        label: "Cooling system leak, pressure loss, thermostat fault, fan issue, or water pump problem",
-        boost: 70,
-        evidence:
-          "overheating with coolant symptoms is a high-priority cooling-system pattern",
-      },
-    ],
-  },
-  {
-    name: "white_smoke_coolant_overheat",
-    triggers: [
-      "white smoke",
-      "sweet smell",
-      "coolant smell",
-      "coolant loss",
-      "low coolant",
-      "overheating",
-      "overheat",
-      "rough start",
-    ],
-    minimumHits: 3,
-    prioritize: [
-      {
-        key: "head_gasket_or_internal_coolant_leak",
-        label: "Possible head gasket leak or internal coolant intrusion",
-        boost: 75,
-        evidence:
-          "white smoke, coolant loss, sweet smell, and overheating together raise concern for internal coolant entry",
-      },
-    ],
-  },
-  {
-    name: "no_crank_clicking",
-    triggers: [
-      "no crank",
-      "single click",
-      "rapid click",
-      "clicking",
-      "only clicks",
-      "starter clicks",
-      "lights dim",
-      "battery",
-    ],
-    minimumHits: 2,
-    prioritize: [
-      {
-        key: "starting_system",
-        label: "Weak battery, voltage drop, starter motor, relay, or main power connection fault",
-        boost: 60,
-        evidence:
-          "clicking or no-crank behavior points toward starting power and starter control",
-      },
-    ],
-  },
-  {
-    name: "crank_no_start",
-    triggers: [
-      "cranks but won't start",
-      "cranks but does not start",
-      "crank no start",
-      "cranks normally",
-      "turns over",
-      "won't fire",
-      "no start",
-    ],
-    minimumHits: 2,
-    prioritize: [
-      {
-        key: "crank_no_start_path",
-        label: "Fuel delivery, spark, injector pulse, compression, crank sensor, or immobilizer issue",
-        boost: 58,
-        evidence:
-          "normal cranking separates this from battery/starter failure and moves diagnosis toward fuel, spark, compression, or security",
-      },
-    ],
-  },
-];
-
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ result: "Method not allowed" });
   }
 
   try {
-    const {
-      issue,
-      answers,
-      language,
-      vehicleProfile,
-      flowControl,
-      localDiagnosticDraft,
-    } = req.body;
+    const { issue, answers, language, vehicleProfile, flowControl } = req.body;
 
     const lang = language === "es" ? "es" : "en";
     const safeIssue = String(issue || "").trim();
     const answerList = Array.isArray(answers) ? answers : [];
-    const profile = vehicleProfile || {};
-    const localDraft = String(localDiagnosticDraft || "").trim();
 
     if (!safeIssue) {
       return res.status(200).json({
@@ -354,50 +76,30 @@ export default async function handler(req, res) {
       });
     }
 
-    const possibleObdCode = safeIssue.match(/\b[PCBU][0-9A-F]{4}\b/i);
-    const hasObdCode = Boolean(possibleObdCode);
-    const obdCode = hasObdCode ? possibleObdCode[0].toUpperCase() : "";
+    const obdCode = extractObdCode(safeIssue);
+    const hasObdCode = Boolean(obdCode);
 
     const liveDataContext = parseLiveDataContext(safeIssue);
     const obdInsight = buildObdInsight({
-      code: obdCode,
+      code: obdCode || "",
       liveData: liveDataContext,
     });
 
     const realAnswerCount = countUserAnswers(answerList);
     const dominantSignals = detectDominantSignals(safeIssue, answerList);
-    const diagnosticIdentity = detectDiagnosticIdentity(safeIssue, answerList);
+    const identity = detectDiagnosticIdentity(safeIssue, answerList);
 
-    const patternMemory = applyPatternMemory({
+    const ranking = buildRanking({
       issue: safeIssue,
       answers: answerList,
       dominantSignals,
       obdCode,
       obdInsight,
-      diagnosticIdentity,
+      identity,
     });
-
-    const localRanking = buildDominantCauseRanking({
-      issue: safeIssue,
-      answers: answerList,
-      dominantSignals,
-      obdCode,
-      obdInsight,
-      patternMemory,
-      diagnosticIdentity,
-    });
-
-    const complexity = detectComplexity(safeIssue, dominantSignals, answerList);
-    const readiness = detectDiagnosticReadiness(
-      safeIssue,
-      answerList,
-      dominantSignals,
-      complexity
-    );
 
     const forcedFinal = shouldForceFinal({
       flowControl,
-      answerList,
       realAnswerCount,
       hasObdCode,
     });
@@ -405,16 +107,8 @@ export default async function handler(req, res) {
     if (!hasObdCode && !forcedFinal && realAnswerCount < REQUIRED_FOLLOW_UPS) {
       const followUp =
         realAnswerCount === 0
-          ? buildSmartFollowUp({
-              lang,
-              issue: safeIssue,
-              answers: answerList,
-            })
-          : buildSecondFollowUp({
-              lang,
-              issue: safeIssue,
-              answers: answerList,
-            });
+          ? buildSmartFollowUp({ lang, issue: safeIssue, answers: answerList })
+          : buildSecondFollowUp({ lang, issue: safeIssue, answers: answerList });
 
       return res.status(200).json({ result: followUp });
     }
@@ -423,65 +117,38 @@ export default async function handler(req, res) {
       lang,
       issue: safeIssue,
       answers: answerList,
-      vehicleProfile: profile,
+      vehicleProfile,
       dominantSignals,
-      diagnosticIdentity,
-      localRanking,
-      patternMemory,
-      complexity,
-      readiness,
+      identity,
+      ranking,
       obdCode,
-      hasObdCode,
       obdInsight,
-      realAnswerCount,
     });
 
     const aiText = await requestOpenAIReport(prompt);
-    let result = aiText ? cleanAndFinalize(aiText, lang) : "";
+    let result = cleanFinal(aiText || "");
 
-    if (!result || looksLikeFollowUp(result) || looksGeneric(result)) {
-      result =
-        localDraft ||
-        buildMechanicAnalysis({
-          lang,
-          issue: safeIssue,
-          answers: answerList,
-          dominantSignals,
-          diagnosticIdentity,
-          localRanking,
-          patternMemory,
-          obdCode,
-          obdInsight,
-        });
-    }
-
-    result = cleanAndFinalize(result, lang);
-
-    if (looksGeneric(result)) {
-      result = buildMechanicAnalysis({
+    if (!result || looksBad(result)) {
+      result = buildLocalMechanicReport({
         lang,
         issue: safeIssue,
         answers: answerList,
-        dominantSignals,
-        diagnosticIdentity,
-        localRanking,
-        patternMemory,
+        ranking,
+        identity,
         obdCode,
         obdInsight,
       });
     }
 
-    return res.status(200).json({ result });
-  } catch (_) {
+    return res.status(200).json({ result: cleanFinal(result) });
+  } catch (error) {
     return res.status(200).json({
-      result: buildMechanicAnalysis({
+      result: buildLocalMechanicReport({
         lang: "en",
         issue: "The vehicle has a symptom that needs diagnostic review.",
         answers: [],
-        dominantSignals: [],
-        diagnosticIdentity: null,
-        localRanking: null,
-        patternMemory: null,
+        ranking: null,
+        identity: null,
         obdCode: "",
         obdInsight: "",
       }),
@@ -489,239 +156,328 @@ export default async function handler(req, res) {
   }
 }
 
-function buildMechanicAnalysis({
-  lang,
-  issue,
-  answers,
-  dominantSignals,
-  diagnosticIdentity,
-  localRanking,
-  patternMemory,
-  obdCode,
-  obdInsight,
-}) {
+function buildSmartFollowUp({ lang, issue, answers }) {
+  const isEs = lang === "es";
+  const text = buildCombinedText(issue, answers);
+  const asked = getAskedText(answers);
+
+  if (hasAny(text, ["tick", "ticking", "tap", "tapping", "lifter", "valvetrain"]) && !hasAny(asked, ["rpm", "idle", "cold", "warm"])) {
+    return followUpBlock({
+      isEs,
+      summary: isEs ? "Necesito ubicar cuándo aparece el tick." : "I need to locate when the ticking shows up.",
+      question: isEs ? "¿Cuándo se nota más el tick: acelerando, en idle, en frío o caliente?" : "When is the ticking most noticeable: accelerating, at idle, cold, or warm?",
+      options: isEs ? ["Acelerando", "En idle", "En frío", "Caliente"] : ["Accelerating", "At idle", "Cold", "Warm"],
+      stop: isEs ? "Deja de manejar si se vuelve golpe metálico profundo o aparece luz roja." : "Stop driving if it turns into a deep metallic knock or a red warning light appears.",
+    });
+  }
+
+  if (hasAny(text, ["flashing check engine", "check engine light flashes", "fuel smell", "gas smell", "jerking", "uphill", "hesitating", "loses power"]) && !hasAny(asked, ["misfire", "fuel trim", "scan"])) {
+    return followUpBlock({
+      isEs,
+      summary: isEs ? "La falla bajo carga puede apuntar a misfire o combustible." : "The load-related fault may point to misfire or fuel control.",
+      question: isEs ? "¿Tienes código misfire, fuel trims altos o datos del scanner durante la falla?" : "Do you have a misfire code, high fuel trims, or scan data captured during the fault?",
+      options: isEs ? ["Código misfire", "Fuel trims altos", "Sin datos", "No sé"] : ["Misfire code", "High fuel trims", "No scan data", "Not sure"],
+      stop: isEs ? "Deja de manejar si la luz check engine parpadea o huele fuerte a combustible." : "Stop driving if the check engine light flashes or the fuel smell becomes strong.",
+    });
+  }
+
+  if (isTrueNoStart(text) && !hasAny(asked, ["crank", "click", "sound"])) {
+    return followUpBlock({
+      isEs,
+      summary: isEs ? "Primero separo batería, starter o crank-no-start." : "First I need to separate battery, starter, or crank-no-start.",
+      question: isEs ? "Cuando intentas encender, ¿el motor gira, hace click o no hace nada?" : "When you try to start it, does the engine crank, click, or do nothing?",
+      options: isEs ? ["Gira normal", "Solo click", "No hace nada", "No sé"] : ["Cranks normally", "Only clicks", "No sound", "Not sure"],
+      stop: isEs ? "No sigas intentando si huele a quemado o sale humo." : "Do not keep trying if you smell burning or see smoke.",
+    });
+  }
+
+  if (hasAny(text, ["vibration", "shaking", "wobble"]) && !hasAny(asked, ["steering", "seat", "brake pedal"])) {
+    return followUpBlock({
+      isEs,
+      summary: isEs ? "La ubicación de la vibración cambia el diagnóstico." : "Where the vibration is felt changes the diagnosis.",
+      question: isEs ? "¿Dónde se siente más: volante, asiento/piso o pedal de freno?" : "Where do you feel it most: steering wheel, seat/floor, or brake pedal?",
+      options: isEs ? ["Volante", "Asiento/piso", "Pedal de freno", "Todo el carro"] : ["Steering wheel", "Seat/floor", "Brake pedal", "Whole car"],
+      stop: isEs ? "Deja de manejar si el volante se siente inestable." : "Stop driving if the steering feels unstable.",
+    });
+  }
+
+  return followUpBlock({
+    isEs,
+    summary: isEs ? "Necesito una condición específica." : "I need one specific condition.",
+    question: isEs ? "¿Cuándo aparece más: acelerando, frenando, en idle o a velocidad constante?" : "When does it happen most: accelerating, braking, at idle, or steady speed?",
+    options: isEs ? ["Acelerando", "Frenando", "En idle", "Velocidad constante"] : ["Accelerating", "Braking", "At idle", "Steady speed"],
+    stop: isEs ? "Deja de manejar si se siente inseguro o aparece luz roja." : "Stop driving if the vehicle feels unsafe or shows a red warning light.",
+  });
+}
+
+function buildSecondFollowUp({ lang, issue, answers }) {
+  const isEs = lang === "es";
+  const text = buildCombinedText(issue, answers);
+  const system = detectSystem(issue);
+
+  if (hasAny(text, ["tick", "ticking", "tap", "tapping", "lifter", "valvetrain"])) {
+    return followUpBlock({
+      isEs,
+      summary: isEs ? "Ahora separo inyector normal de tren de válvulas." : "Now I need to separate injector tick from top-end mechanical tick.",
+      question: isEs ? "¿El tick cambia con RPM o queda igual en idle?" : "Does the tick change with RPM, or stay about the same at idle?",
+      options: isEs ? ["Cambia con RPM", "Igual en idle", "Más fuerte en frío", "No sé"] : ["Changes with RPM", "Same at idle", "Louder cold", "Not sure"],
+      stop: isEs ? "Deja de manejar si se vuelve golpe profundo." : "Stop driving if it turns into a deep knock.",
+    });
+  }
+
+  if (system === "engine_drivability" || hasAny(text, ["misfire", "uphill", "flashing", "fuel smell", "jerking"])) {
+    return followUpBlock({
+      isEs,
+      summary: isEs ? "Ahora separo ignition breakdown de fuel delivery." : "Now I need to separate ignition breakdown from fuel delivery.",
+      question: isEs ? "¿La falla aparece más bajo carga fuerte, en idle o después de calentarse?" : "Does it happen more under heavy load, at idle, or after warming up?",
+      options: isEs ? ["Carga fuerte", "En idle", "Después de calentarse", "No sé"] : ["Heavy load", "At idle", "After warming up", "Not sure"],
+      stop: isEs ? "Deja de manejar si la luz check engine sigue parpadeando." : "Stop driving if the check engine light keeps flashing.",
+    });
+  }
+
+  if (system === "brakes") {
+    return followUpBlock({
+      isEs,
+      summary: isEs ? "Ahora separo rotor, hub y caliper." : "Now I need to separate rotor, hub, and caliper behavior.",
+      question: isEs ? "¿La vibración empeora cuando los frenos se calientan?" : "Does the vibration get worse as the brakes heat up?",
+      options: isEs ? ["Peor caliente", "Igual siempre", "Solo highway", "No sé"] : ["Worse hot", "Same every time", "Only highway", "Not sure"],
+      stop: isEs ? "Deja de manejar si el pedal se pone suave." : "Stop driving if the pedal gets soft.",
+    });
+  }
+
+  return followUpBlock({
+    isEs,
+    summary: isEs ? "Necesito un dato final." : "I need one final detail.",
+    question: isEs ? "¿Aparece bajo carga, al frenar, en idle o caliente?" : "Does it happen under load, while braking, at idle, or after warming up?",
+    options: isEs ? ["Bajo carga", "Al frenar", "En idle", "Caliente"] : ["Under load", "While braking", "At idle", "After warming up"],
+    stop: isEs ? "Deja de manejar si se siente inseguro." : "Stop driving if the vehicle feels unsafe.",
+  });
+}
+
+function followUpBlock({ isEs, summary, question, options, stop }) {
+  return `Diagnosis status: follow_up
+
+Voice summary:
+${summary}
+
+Risk level:
+Medium
+
+Likely issue:
+Pending diagnostic confirmation.
+
+Why it fits:
+${summary}
+
+What to inspect next:
+${question}
+
+What to do next:
+${question}
+
+Answer options:
+${options.join("\n")}
+
+When to stop driving:
+${stop}`;
+}
+
+function buildRanking({ issue, answers, dominantSignals, obdCode, obdInsight, identity }) {
+  const text = [
+    buildCombinedText(issue, answers),
+    Array.isArray(dominantSignals) ? dominantSignals.join(" ") : "",
+    obdCode || "",
+    obdInsight || "",
+    identity?.label || "",
+  ].join(" ").toLowerCase();
+
+  const scores = [];
+
+  const add = (key, label, points, evidence) => {
+    const found = scores.find((x) => x.key === key);
+    if (found) {
+      found.score += points;
+      found.evidence.push(evidence);
+    } else {
+      scores.push({ key, label, score: points, evidence: [evidence] });
+    }
+  };
+
+  if (identity?.key === "engine_ticking") {
+    add("engine_tick", "Injector tick, lifter tap, rocker arm tick, cam follower noise, small exhaust manifold leak, or pulley/tensioner tick", 80, "engine-side ticking identity");
+  }
+
+  if (hasAny(text, ["flashing check engine", "check engine light flashes", "cel flashes", "misfire", "p0300", "p0301", "p0302", "p0303", "p0304"])) {
+    add("ignition_misfire", "Ignition coil breakdown, spark plug misfire, or cylinder misfire under load", 55, "flashing CEL or misfire evidence");
+  }
+
+  if (hasAny(text, ["uphill", "under load", "heavy load", "accelerating", "jerking", "hesitating", "weak acceleration"])) {
+    add("ignition_misfire", "Ignition coil breakdown, spark plug misfire, or cylinder misfire under load", 35, "symptom appears under load");
+    add("fuel_delivery", "Weak fuel pump, restricted filter, or fuel pressure drop under demand", 22, "load demand can expose fuel delivery weakness");
+  }
+
+  if (hasAny(text, ["fuel smell", "gas smell", "raw fuel", "smells like fuel", "smells like gas"])) {
+    add("unburned_fuel", "Unburned fuel from incomplete combustion, rich mixture, or leaking injector", 40, "fuel smell is present");
+  }
+
+  if (hasAny(text, ["high fuel trim", "positive fuel trim", "p0171", "p0174", "lean code"])) {
+    add("lean_condition", "Lean condition from vacuum leak, unmetered air, weak fuel delivery, or sensor error", 34, "fuel trim or lean code evidence");
+  }
+
+  if (hasAny(text, ["black smoke", "dark smoke"])) {
+    add("rich_condition", "Rich fuel condition, leaking injector, or fuel pressure regulator fault", 55, "black smoke indicates overfueling");
+  }
+
+  if (hasAny(text, ["brake", "braking", "pedal vibration", "pulsation", "rotor", "grinding"])) {
+    add("brake_system", "Brake rotor runout, pad transfer, caliper drag, hub runout, or brake hardware fault", 45, "brake-related symptom");
+  }
+
+  if (hasAny(text, ["highway", "65 mph", "70 mph", "steering wheel", "seat", "floor", "wobble", "vibration"])) {
+    add("wheel_tire", "Wheel balance issue, tire defect, bent wheel, hub runout, or suspension looseness", 36, "speed/vibration pattern");
+  }
+
+  if (hasAny(text, ["overheat", "overheating", "coolant", "steam", "temperature light", "temp gauge"])) {
+    add("cooling_system", "Cooling system leak, thermostat fault, fan issue, water pump problem, or pressure loss", 60, "overheating/coolant symptom");
+  }
+
+  if (isTrueNoStart(text)) {
+    add("starting_or_crank_no_start", "Battery, starter, relay, fuel delivery, spark, crank sensor, immobilizer, or compression issue", 45, "no-start symptom");
+  }
+
+  if (obdCode) {
+    add("obd_path", `OBD-confirmed diagnostic path for ${obdCode}`, 38, "OBD code present");
+  }
+
+  const valid = scores.filter((x) => x.score > 0).sort((a, b) => b.score - a.score);
+
+  if (!valid.length) {
+    return {
+      mostLikely: "Primary symptom-based fault in the system matching the operating condition",
+      secondary: "A second cause should be ranked only after codes, live data, or inspection",
+      lessLikely: "Unrelated systems remain less likely unless new symptoms appear",
+      evidence: [],
+      raw: [],
+    };
+  }
+
+  return {
+    mostLikely: valid[0].label,
+    secondary: valid[1]?.label || "Secondary cause not strong yet without more test data",
+    lessLikely: valid[2]?.label || "Less likely unless new evidence appears",
+    evidence: valid[0].evidence,
+    raw: valid,
+  };
+}
+
+function detectDiagnosticIdentity(issue, answers = []) {
   const text = buildCombinedText(issue, answers);
 
-  const ranking =
-    localRanking ||
-    buildDominantCauseRanking({
-      issue,
-      answers,
-      dominantSignals,
-      obdCode,
-      obdInsight,
-      patternMemory,
-      diagnosticIdentity,
-    });
+  if (hasAny(text, ["tick", "ticking", "tap", "tapping", "lifter", "valvetrain", "rocker", "injector tick"])) {
+    return {
+      key: "engine_ticking",
+      label: "Engine-side ticking or tapping identity",
+    };
+  }
 
-  const likely = ranking?.mostLikely || "Mechanical fault pattern detected";
-  const secondary =
-    ranking?.secondary || "Secondary related system possibility";
-  const lessLikely =
-    ranking?.lessLikely || "Lower probability causes remain secondary";
+  if (hasAny(text, ["knock", "knocking", "rod knock", "deep knock"])) {
+    return {
+      key: "engine_knock",
+      label: "Engine knock identity",
+    };
+  }
 
-  const highRisk = includesAny(text, [
+  if (hasAny(text, ["squeal", "chirp", "belt squeal"])) {
+    return {
+      key: "belt_squeal",
+      label: "Belt or accessory-drive squeal identity",
+    };
+  }
+
+  return { key: "general", label: "General diagnostic identity" };
+}
+
+function buildLocalMechanicReport({ lang, issue, answers, ranking, identity, obdCode, obdInsight }) {
+  const text = buildCombinedText(issue, answers);
+  const r = ranking || buildRanking({ issue, answers, dominantSignals: [], obdCode, obdInsight, identity });
+
+  const risk = hasAny(text, [
     "flashing check engine",
     "check engine light flashes",
+    "fuel smell",
     "overheat",
     "overheating",
     "burning smell",
     "smoke",
-    "fuel smell",
     "brake failure",
     "red warning",
-  ]);
+  ])
+    ? "High"
+    : "Medium";
 
-  const risk = highRisk ? "High" : "Medium";
+  let why;
+  let inspect;
+  let next;
+  let stop;
 
-  let why = "";
-  let inspect = "";
-  let next = "";
-  let stop = "";
-
-  // =========================
-  // MISFIRE / LOAD / FUEL
-  // =========================
-
-  if (
-    includesAny(text, [
-      "flashing check engine",
-      "fuel smell",
-      "uphill",
-      "under load",
-      "heavy load",
-      "jerking",
-      "hesitating",
-      "misfire",
-    ])
-  ) {
-    why = `
-The symptom pattern strongly behaves like an active combustion breakdown under load. 
-Jerking during acceleration combined with a flashing check engine light usually points toward a cylinder misfire severe enough to affect combustion stability. 
-The fuel smell fits unburned fuel leaving the cylinder when ignition becomes weak under load. 
-Ignition coils and spark plugs often fail first during high cylinder pressure situations such as uphill acceleration or heavy throttle demand.
-`.trim();
-
-    inspect = `
-Start by checking stored misfire codes and live misfire counters. 
-Inspect ignition coils, spark plugs, plug condition, coil boots, and cylinder-specific fuel trims. 
-Look for one cylinder behaving differently under load. 
-If fuel smell is strong, inspect injector leakage and fuel pressure behavior. 
-Check for catalyst overheating signs if the flashing check engine light continues.
-`.trim();
-
-    next = `
-Avoid heavy acceleration until the fault is confirmed. 
-The strongest direction currently points toward ignition breakdown or an active cylinder misfire under load. 
-Diagnose the misfire before replacing random parts.
-`.trim();
-
-    stop = `
-Stop driving if the flashing check engine light becomes constant, the engine shakes heavily, power drops sharply, fuel smell becomes strong, or the catalytic converter begins overheating.
-`.trim();
-  }
-
-  // =========================
-  // ENGINE TICK
-  // =========================
-
-  else if (
-    includesAny(text, [
-      "tick",
-      "ticking",
-      "tap",
-      "tapping",
-      "valvetrain",
-      "lifter",
-      "injector tick",
-      "rocker",
-    ])
-  ) {
-    why = `
-The sound pattern behaves more like an engine-speed-related mechanical tick than a driveline or brake issue. 
-Injector pulse can create a light rhythmic ticking sound, while lifters, rocker arms, or cam followers create sharper top-end ticking when clearance or oil control changes. 
-A small exhaust manifold leak can also produce a ticking noise, especially near cold start or light acceleration.
-`.trim();
-
-    inspect = `
-Use a mechanic's stethoscope to compare injector noise, valve cover area, tensioner pulleys, and exhaust manifold areas. 
-Inspect oil level and oil condition. 
-Look for one injector louder than the others or signs of exhaust soot near the manifold.
-`.trim();
-
-    next = `
-Drive gently until the sound source is confirmed. 
-If the sound stays light and stable, inspect it soon without panic. 
-If it becomes deeper, metallic, or louder with RPM, inspect immediately.
-`.trim();
-
-    stop = `
-Stop driving if the ticking becomes a deep knock, oil pressure warning appears, smoke develops, overheating starts, or power loss becomes severe.
-`.trim();
-  }
-
-  // =========================
-  // BRAKE VIBRATION
-  // =========================
-
-  else if (
-    includesAny(text, [
-      "brake vibration",
-      "pedal vibration",
-      "vibration while braking",
-      "pulsation",
-      "rotor",
-    ])
-  ) {
-    why = `
-The vibration pattern is directly connected to brake application, which points first toward rotor runout, uneven pad transfer, hub runout, or caliper behavior. 
-Brake-related vibration behaves differently from tire imbalance because it changes during brake pressure application.
-`.trim();
-
-    inspect = `
-Inspect rotor surfaces, hub runout, caliper movement, pad deposits, and wheel bearing play. 
-Compare vibration strength between light and heavy braking.
-`.trim();
-
-    next = `
-Avoid aggressive braking until the brake system is inspected. 
-The strongest direction currently points toward brake hardware or rotor-related behavior.
-`.trim();
-
-    stop = `
-Stop driving if braking distance increases, the pedal becomes soft, grinding develops, or the steering becomes unstable during braking.
-`.trim();
-  }
-
-  // =========================
-  // OVERHEAT
-  // =========================
-
-  else if (
-    includesAny(text, [
-      "overheat",
-      "overheating",
-      "coolant",
-      "steam",
-      "temperature",
-    ])
-  ) {
-    why = `
-The pattern points toward cooling-system pressure loss, coolant circulation failure, airflow problems, or internal coolant leakage. 
-Coolant loss combined with overheating is considered safety-relevant until proven otherwise.
-`.trim();
-
-    inspect = `
-Pressure test the cooling system. 
-Inspect coolant level, radiator flow, thermostat operation, cooling fan behavior, water pump circulation, and external leaks.
-`.trim();
-
-    next = `
-Avoid driving the vehicle hot. 
-Continued overheating can quickly damage head gaskets, cylinder heads, and internal engine components.
-`.trim();
-
-    stop = `
-Stop driving immediately if steam appears, coolant temperature climbs rapidly, coolant empties quickly, or the engine begins losing power.
-`.trim();
-  }
-
-  // =========================
-  // GENERIC BUT STILL MECHANICAL
-  // =========================
-
-  else {
-    why = `
-The symptom pattern currently points toward the strongest ranked mechanical direction based on the user's answers, dominant symptom behavior, and operating conditions. 
-The leading cause remains ahead because it matches the way the symptom changes under load, speed, idle, heat, sound behavior, vibration behavior, or system response.
-`.trim();
-
-    inspect = `
-Inspect the highest-ranked system first using live data, visual inspection, stored codes, sound location, connector condition, leak checks, and operating-condition testing.
-`.trim();
-
-    next = `
-Focus on confirming the strongest mechanical direction before replacing parts. 
-Avoid random part replacement without verification.
-`.trim();
-
-    stop = `
-Stop driving if the symptom becomes severe, unsafe, produces smoke or burning smell, creates strong vibration, overheats, or triggers a red warning light.
-`.trim();
+  if (hasAny(text, ["flashing check engine", "fuel smell", "uphill", "under load", "heavy load", "jerking", "hesitating", "misfire"])) {
+    why =
+      "Jerking under acceleration or uphill load with a flashing check engine light behaves like an active misfire under high cylinder pressure. The fuel smell fits unburned fuel leaving the cylinder when combustion breaks down. Ignition coils and spark plugs often fail first under load, while injector leakage or rich fuel control remains a secondary possibility.";
+    inspect =
+      "Check stored P0300/P030x codes, live misfire counters, spark plugs, ignition coils, coil boots, plug gaps, injector leakage, fuel pressure, and cylinder-specific fuel trims. If the flashing light continues, inspect catalytic converter temperature and exhaust restriction risk.";
+    next =
+      "Avoid heavy acceleration and diagnose the misfire path first. Do not keep driving hard with a flashing check engine light because repeated misfire can damage the catalytic converter.";
+    stop =
+      "Stop driving if the check engine light keeps flashing, the engine shakes heavily, power drops sharply, fuel smell becomes strong, or the exhaust/catalyst area smells extremely hot.";
+  } else if (identity?.key === "engine_ticking") {
+    why =
+      "The dominant symptom is an engine-side tick, which usually follows engine speed. Injector pulse can make a light rhythmic tick. Lifters, rocker arms, cam followers, or oil-control issues can create sharper top-end ticking. A small exhaust manifold leak can also tick, especially cold or under light load.";
+    inspect =
+      "Use a mechanic's stethoscope to compare injectors, valve cover area, belt tensioner, idler pulleys, alternator, and exhaust manifold. Check oil level and condition, listen for one injector louder than the others, and look for soot near the manifold.";
+    next =
+      "Drive gently until the sound source is confirmed. If the tick is light and stable, inspect soon. If it becomes deep, metallic, or louder with RPM, inspect immediately.";
+    stop =
+      "Stop driving if the tick turns into a deep knock, oil pressure warning appears, smoke develops, overheating starts, or power drops strongly.";
+  } else if (hasAny(text, ["brake", "braking", "pedal vibration", "rotor", "grinding"])) {
+    why =
+      "A symptom tied to braking points first toward brake rotor runout, uneven pad transfer, caliper drag, hub runout, or brake hardware movement rather than engine or transmission causes.";
+    inspect =
+      "Inspect rotor surfaces, rotor runout, hub face runout, caliper slide movement, pad deposits, wheel bearing play, and whether the vibration changes with light versus hard braking.";
+    next =
+      "Avoid aggressive braking until the brake system is inspected.";
+    stop =
+      "Stop driving if braking distance increases, the pedal becomes soft, grinding develops, or the vehicle pulls hard while braking.";
+  } else if (hasAny(text, ["overheat", "overheating", "coolant", "steam", "temperature"])) {
+    why =
+      "Overheating or coolant symptoms point toward pressure loss, poor coolant circulation, airflow failure, thermostat problems, water pump issues, or internal coolant leakage.";
+    inspect =
+      "Pressure test the cooling system, verify coolant level, inspect for leaks, test thermostat operation, cooling fan behavior, radiator flow, water pump circulation, and signs of exhaust gas in coolant.";
+    next =
+      "Do not drive the vehicle hot. Continued overheating can damage the head gasket, cylinder head, and internal engine components.";
+    stop =
+      "Stop driving immediately if steam appears, the temperature rises rapidly, coolant empties quickly, or the engine loses power.";
+  } else {
+    why =
+      "The ranking is based on the strongest matching operating condition, symptom behavior, and user answers. The leading cause fits better than unrelated systems because it matches when and how the symptom appears.";
+    inspect =
+      "Check stored codes, live data, visual evidence, connectors, leaks, sound location, vibration location, and whether the symptom changes with load, idle, speed, braking, heat, or RPM.";
+    next =
+      "Confirm the leading cause before replacing parts.";
+    stop =
+      "Stop driving if the vehicle feels unsafe, overheats, smells like burning or fuel, loses strong power, shakes badly, or shows a red warning light.";
   }
 
   return `Diagnosis status: analysis
 
 Voice summary:
-The symptom pattern leans most toward ${likely}.
+The pattern leans most toward ${r.mostLikely}.
 
 Risk level:
 ${risk}
 
 Likely issue:
-Most likely: ${likely}
-Secondary possibility: ${secondary}
-Less likely: ${lessLikely}
+Most likely: ${r.mostLikely}
+Secondary possibility: ${r.secondary}
+Less likely: ${r.lessLikely}
 
 Why it fits:
 ${why}
@@ -739,211 +495,134 @@ When to stop driving:
 ${stop}`;
 }
 
-function buildAnalysisPrompt({
-  lang,
-  issue,
-  answers,
-  vehicleProfile,
-  dominantSignals,
-  diagnosticIdentity,
-  localRanking,
-  patternMemory,
-  complexity,
-  readiness,
-  obdCode,
-  hasObdCode,
-  obdInsight,
-  realAnswerCount,
-}) {
-  const vehicleText = buildVehicleText(vehicleProfile);
+function buildAnalysisPrompt({ lang, issue, answers, vehicleProfile, dominantSignals, identity, ranking, obdCode, obdInsight }) {
+  const userAnswers = answers.length
+    ? answers.map((a, i) => `${i + 1}. ${a.question || "Question"}: ${a.answer || ""}`).join("\n")
+    : "No additional answers.";
 
-  const userInput =
-    answers.length > 0
-      ? answers
-          .map((a, index) => {
-            const q = String(a.question || `Question ${index + 1}`).trim();
-            const ans = String(a.answer || "").trim();
-            return `${index + 1}. ${q}: ${ans}`;
-          })
-          .join("\n")
-      : "No additional answers.";
-
-  return `
-${DOCTOR_PROMPT}
+  return `${DOCTOR_PROMPT}
 
 Language:
 ${lang === "es" ? "Spanish only" : "English only"}
 
+Vehicle:
+${buildVehicleText(vehicleProfile)}
+
 Original problem:
 ${issue}
 
-Vehicle profile:
-${vehicleText}
-
 User answers:
-${userInput}
+${userAnswers}
 
-OBD code:
-${hasObdCode ? obdCode : "None"}
+Dominant signals:
+${Array.isArray(dominantSignals) ? dominantSignals.join(", ") : "None"}
+
+Diagnostic identity:
+${identity?.label || "None"}
+
+OBD:
+${obdCode || "None"}
 
 OBD insight:
 ${obdInsight || "None"}
 
-Dominant signals:
-${dominantSignals.join(", ") || "None"}
-
-Diagnostic identity:
-${diagnosticIdentity?.label || "None"}
-
 Local ranking:
-Most likely: ${localRanking?.mostLikely || "None"}
-Secondary: ${localRanking?.secondary || "None"}
-Less likely: ${localRanking?.lessLikely || "None"}
+Most likely: ${ranking?.mostLikely || "None"}
+Secondary: ${ranking?.secondary || "None"}
+Less likely: ${ranking?.lessLikely || "None"}
 
-Complexity:
-${complexity?.level || "standard"}
-
-Readiness:
-${readiness?.reason || "ready"}
-
-Answered questions:
-${realAnswerCount}
-
-Final instructions:
-- Sound like a real senior mechanic.
-- Do not sound like AI.
-- Never use vague filler language.
-- Always explain WHY mechanically.
-- Always mention real systems/components.
-- Keep the dominant symptom protected.
-- Never flatten all causes equally.
-- Never output generic inspection wording.
-`;
+Produce the final report now.`;
 }
 
-function cleanAndFinalize(text, lang) {
+async function requestOpenAIReport(prompt) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: process.env.DRIVESHIFT_MODEL || "gpt-4o-mini",
+        input: prompt,
+        temperature: 0.06,
+        max_output_tokens: 1050,
+      }),
+    });
+
+    clearTimeout(timeout);
+    if (!response.ok) return "";
+
+    const data = await response.json();
+    return extractText(data).trim();
+  } catch (_) {
+    clearTimeout(timeout);
+    return "";
+  }
+}
+
+function shouldForceFinal({ flowControl, realAnswerCount, hasObdCode }) {
+  if (hasObdCode) return true;
+  if (realAnswerCount >= REQUIRED_FOLLOW_UPS) return true;
+
+  const decision = String(flowControl?.localDecision || "").toLowerCase();
+  return decision === "final" || decision === "analysis";
+}
+
+function cleanFinal(text) {
   let clean = String(text || "").trim();
 
-  clean = normalizeStatus(clean);
-  clean = ensureAnswerOptionsNone(clean);
-  clean = removeGenericLanguage(clean);
-  clean = removeFollowUpLanguage(clean);
+  if (!clean) return "";
 
-  return clean.trim();
-}
+  clean = clean.replace(/Diagnosis status:\s*(follow_up|final)/i, "Diagnosis status: analysis");
 
-function removeGenericLanguage(text) {
-  return String(text || "")
-    .replace(/targeted inspection needed/gi, "")
-    .replace(/related electrical, sensor, mechanical, or fluid issue/gi, "")
-    .replace(/start with the system most connected/gi, "")
-    .replace(/main symptom and the user’s answers point/gi, "")
-    .replace(/strongest mechanical direction/gi, "")
-    .replace(/related issue/gi, "")
-    .replace(/mechanical direction/gi, "")
-    .trim();
-}
-
-function normalizeStatus(text) {
-  let clean = String(text || "").trim();
-
-  if (/Diagnosis status:/i.test(clean)) {
-    clean = clean.replace(
-      /Diagnosis status:\s*(follow_up|analysis|final)/i,
-      "Diagnosis status: analysis"
-    );
-  } else {
+  if (!/Diagnosis status:/i.test(clean)) {
     clean = `Diagnosis status: analysis\n\n${clean}`;
   }
 
+  if (/Answer options:/i.test(clean)) {
+    clean = clean.replace(/Answer options:\s*[\s\S]*?(?=When to stop driving:)/i, "Answer options:\nNone\n\n");
+  } else {
+    clean += "\n\nAnswer options:\nNone";
+  }
+
   return clean.trim();
 }
 
-function ensureAnswerOptionsNone(text) {
-  if (/Answer options:/i.test(text)) {
-    return text.replace(
-      /Answer options:\s*[\s\S]*?(?=When to stop driving:)/i,
-      "Answer options:\nNone\n\n"
-    );
-  }
-
-  return `${text.trim()}\n\nAnswer options:\nNone`;
-}
-
-function removeFollowUpLanguage(text) {
-  return String(text || "")
-    .replace(/need one more detail/gi, "")
-    .replace(/still narrowing/gi, "")
-    .replace(/before i can diagnose/gi, "")
-    .replace(/could be many things/gi, "")
-    .trim();
-}
-
-function looksGeneric(text) {
-  const clean = String(text || "").toLowerCase();
-
-  const bad = [
-    "targeted inspection needed",
-    "related electrical",
-    "main symptom points",
-    "strongest mechanical direction",
-    "related issue",
-    "system most connected",
-  ];
-
-  return bad.some((x) => clean.includes(x));
-}
-
-function looksLikeFollowUp(text) {
+function looksBad(text) {
   const clean = String(text || "").toLowerCase();
 
   return (
+    !clean ||
     clean.includes("diagnosis status: follow_up") ||
-    clean.includes("answer options: yes") ||
+    clean.includes("targeted inspection needed") ||
+    clean.includes("related electrical") ||
+    clean.includes("system most connected") ||
     clean.includes("what exactly happens")
   );
 }
 
-function applyPatternMemory({
-  issue,
-  answers,
-  dominantSignals,
-  obdCode,
-  obdInsight,
-  diagnosticIdentity,
-}) {
-  const text = [
-    buildCombinedText(issue, answers),
-    Array.isArray(dominantSignals) ? dominantSignals.join(" ") : "",
-    String(obdCode || ""),
-    String(obdInsight || ""),
-    diagnosticIdentity?.label || "",
-  ]
-    .join(" ")
-    .toLowerCase();
-
-  const matched = [];
-
-  for (const pattern of STRONG_PATTERNS) {
-    const hits = pattern.triggers.filter((trigger) =>
-      text.includes(trigger.toLowerCase())
-    );
-
-    if (hits.length >= pattern.minimumHits) {
-      matched.push({
-        name: pattern.name,
-        hits,
-        prioritize: pattern.prioritize || [],
-        suppress: pattern.suppress || [],
-      });
-    }
-  }
-
-  return {
-    matched,
-    hasMatches: matched.length > 0,
-  };
+function extractObdCode(text) {
+  const match = String(text || "").match(/\b[PCBU][0-9A-F]{4}\b/i);
+  return match ? match[0].toUpperCase() : "";
 }
+
+function buildVehicleText(profile) {
+  if (!profile || typeof profile !== "object") return "Unknown vehicle.";
+
+  const parts = [];
+  if (profile.year) parts.push(`Year: ${profile.year}`);
+  if (profile.make) parts.push(`Make: ${profile.make}`);
+  if (profile.model) parts.push(`Model: ${profile.model}`);
+  if (profile.mileage) parts.push(`Mileage: ${profile.mileage}`);
+
+  return parts.length ? parts.join(", ") : "Unknown vehicle.";
+}
+
 function buildCombinedText(issue, answers) {
   return [
     String(issue || ""),
@@ -955,9 +634,32 @@ function buildCombinedText(issue, answers) {
     .toLowerCase();
 }
 
-function includesAny(text, words) {
+function getAskedText(answers) {
+  return Array.isArray(answers)
+    ? answers.map((a) => String(a?.question || "")).join(" ").toLowerCase()
+    : "";
+}
+
+function hasAny(text, words) {
   const clean = String(text || "").toLowerCase();
   return words.some((w) => clean.includes(String(w).toLowerCase()));
+}
+
+function isTrueNoStart(text) {
+  return hasAny(text, [
+    "won't start",
+    "will not start",
+    "does not start",
+    "doesn't start",
+    "no start",
+    "no crank",
+    "cranks but won't start",
+    "cranks but does not start",
+    "starter clicks",
+    "only clicks",
+    "crank no start",
+    "turns over but won't start",
+  ]);
 }
 
 function extractText(data) {
@@ -976,25 +678,4 @@ function extractText(data) {
   } catch (_) {
     return "";
   }
-}
-
-function isTrueNoStart(text) {
-  const clean = String(text || "").toLowerCase();
-
-  const phrases = [
-    "won't start",
-    "will not start",
-    "does not start",
-    "doesn't start",
-    "no start",
-    "no crank",
-    "cranks but won't start",
-    "cranks but does not start",
-    "starter clicks",
-    "only clicks",
-    "crank no start",
-    "turns over but won't start",
-  ];
-
-  return phrases.some((p) => clean.includes(p));
 }
