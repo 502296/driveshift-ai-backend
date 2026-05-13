@@ -1,4 +1,5 @@
 import { extractSignals } from "./signal-extractor.js";
+import { buildDominantLock } from "./dominant-lock-engine.js";
 
 export function countUserAnswers(answers) {
   if (!Array.isArray(answers)) return 0;
@@ -27,7 +28,6 @@ export function detectDominantSignals(issue, answers) {
       label: "black smoke / rich running",
       words: ["black smoke", "dark smoke", "running rich"],
     },
-
     {
       label: "fuel smell / raw fuel",
       words: [
@@ -39,7 +39,6 @@ export function detectDominantSignals(issue, answers) {
         "strong fuel",
       ],
     },
-
     {
       label: "misfire / shaking",
       words: [
@@ -52,7 +51,6 @@ export function detectDominantSignals(issue, answers) {
         "jerking",
       ],
     },
-
     {
       label: "severe power loss",
       words: [
@@ -65,7 +63,6 @@ export function detectDominantSignals(issue, answers) {
         "hesitating",
       ],
     },
-
     {
       label: "flashing check engine",
       words: [
@@ -75,7 +72,6 @@ export function detectDominantSignals(issue, answers) {
         "flashes briefly",
       ],
     },
-
     {
       label: "overheating / cooling risk",
       words: [
@@ -87,7 +83,6 @@ export function detectDominantSignals(issue, answers) {
         "coolant",
       ],
     },
-
     {
       label: "burning smell / smoke safety risk",
       words: [
@@ -98,7 +93,6 @@ export function detectDominantSignals(issue, answers) {
         "electrical burning",
       ],
     },
-
     {
       label: "brake safety risk",
       words: [
@@ -110,7 +104,6 @@ export function detectDominantSignals(issue, answers) {
         "grinding brakes",
       ],
     },
-
     {
       label: "stalling while driving",
       words: [
@@ -119,7 +112,6 @@ export function detectDominantSignals(issue, answers) {
         "shuts off while driving",
       ],
     },
-
     {
       label: "turbo / boost issue",
       words: [
@@ -130,7 +122,6 @@ export function detectDominantSignals(issue, answers) {
         "boost leak",
       ],
     },
-
     {
       label: "electrical / charging issue",
       words: [
@@ -141,16 +132,10 @@ export function detectDominantSignals(issue, answers) {
         "no crank",
       ],
     },
-
     {
       label: "oil pressure risk",
-      words: [
-        "oil pressure",
-        "red oil light",
-        "oil light",
-      ],
+      words: ["oil pressure", "red oil light", "oil light"],
     },
-
     {
       label: "transmission / drivability issue",
       words: [
@@ -162,7 +147,6 @@ export function detectDominantSignals(issue, answers) {
         "flared",
       ],
     },
-
     {
       label: "starting system issue",
       words: [
@@ -175,17 +159,10 @@ export function detectDominantSignals(issue, answers) {
         "starter clicks",
       ],
     },
-
     {
       label: "check engine light",
-      words: [
-        "check engine",
-        "engine light",
-        "cel",
-        "service engine",
-      ],
+      words: ["check engine", "engine light", "cel", "service engine"],
     },
-
     {
       label: "CAN / module communication",
       words: [
@@ -198,15 +175,10 @@ export function detectDominantSignals(issue, answers) {
         "oscilloscope",
       ],
     },
-
     {
       label: "SRS / airbag",
-      words: [
-        "airbag",
-        "srs",
-      ],
+      words: ["airbag", "srs"],
     },
-
     {
       label: "EPS / steering calibration",
       words: [
@@ -216,7 +188,6 @@ export function detectDominantSignals(issue, answers) {
         "zero-point reset",
       ],
     },
-
     {
       label: "bank-specific fuel trim",
       words: [
@@ -239,17 +210,11 @@ export function detectDominantSignals(issue, answers) {
     signals.push("critical overheating behavior");
   }
 
-  if (
-    extracted.signals.smoke &&
-    extracted.signals.fuel_smell
-  ) {
+  if (extracted.signals.smoke && extracted.signals.fuel_smell) {
     signals.push("raw fuel combustion failure");
   }
 
-  if (
-    extracted.signals.vibration &&
-    extracted.signals.load_sensitive
-  ) {
+  if (extracted.signals.vibration && extracted.signals.load_sensitive) {
     signals.push("load-sensitive drivetrain behavior");
   }
 
@@ -303,11 +268,9 @@ export function detectDiagnosticReadiness(
   complexity
 ) {
   const answerCount = countUserAnswers(answers);
-
   const text = buildCombinedText(issue, answers);
 
   let minimumQuestions = complexity?.minimumQuestions || 2;
-
   let reason = complexity?.reason || "standard diagnostic flow";
 
   const strongSignals = [
@@ -357,21 +320,18 @@ export function detectDiagnosticReadiness(
 
   if (hasObviousFuelPattern) {
     minimumQuestions = 3;
-
     reason =
       "black smoke plus fuel smell needs fuel, ignition, and load separation";
   }
 
   if (isAdvancedCase(text)) {
     minimumQuestions = 3;
-
     reason =
       "advanced technician-level input needs three technical narrowing questions";
   }
 
   if (hasStrongSignal) {
     minimumQuestions = Math.max(minimumQuestions, 3);
-
     reason =
       "strong diagnostic signals need a real multi-step flow before final report";
   }
@@ -380,29 +340,18 @@ export function detectDiagnosticReadiness(
 
   return {
     minimumQuestions,
-
-    readyForAnalysis:
-      hasFlowControl || answerCount >= minimumQuestions,
-
+    readyForAnalysis: hasFlowControl || answerCount >= minimumQuestions,
     reason,
   };
 }
 
 export function buildDiagnosticContext(issue, answers = []) {
   const combined = buildCombinedText(issue, answers);
-
   const extracted = extractSignals(combined);
 
-  const dominantSignals = detectDominantSignals(
-    issue,
-    answers
-  );
+  const dominantSignals = detectDominantSignals(issue, answers);
 
-  const complexity = detectComplexity(
-    issue,
-    dominantSignals,
-    answers
-  );
+  const complexity = detectComplexity(issue, dominantSignals, answers);
 
   const readiness = detectDiagnosticReadiness(
     issue,
@@ -410,6 +359,15 @@ export function buildDiagnosticContext(issue, answers = []) {
     dominantSignals,
     complexity
   );
+
+  const dominantLock = buildDominantLock({
+    extracted_signals: extracted.signals,
+    dominant_systems: extracted.dominant_systems,
+    severity: extracted.severity,
+    risk_flags: extracted.risk_flags,
+    dominant_signals: dominantSignals,
+    raw_input: combined,
+  });
 
   return {
     raw_input: combined,
@@ -427,6 +385,8 @@ export function buildDiagnosticContext(issue, answers = []) {
     complexity,
 
     readiness,
+
+    dominant_lock: dominantLock,
   };
 }
 
@@ -443,11 +403,8 @@ export function clamp(value, min, max) {
 function buildCombinedText(issue, answers) {
   return [
     String(issue || ""),
-
     ...(Array.isArray(answers)
-      ? answers.map(
-          (a) => `${a?.question || ""} ${a?.answer || ""}`
-        )
+      ? answers.map((a) => `${a?.question || ""} ${a?.answer || ""}`)
       : []),
   ]
     .join(" ")
