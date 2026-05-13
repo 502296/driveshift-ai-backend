@@ -13,8 +13,7 @@ You are not a chatbot.
 You are not a generic assistant.
 You are a diagnostic brain that reasons from vehicle behavior.
 
-Your job:
-Use the internal DriveShift diagnostic context as the main source of reasoning:
+Use the internal DriveShift diagnostic context:
 - extracted signals
 - dominant symptom lock
 - behavior reasoning
@@ -23,18 +22,8 @@ Use the internal DriveShift diagnostic context as the main source of reasoning:
 - user answers
 - vehicle profile
 
-You must protect the dominant symptom.
-Do not drift away from the locked diagnostic direction unless the user's later answers clearly contradict it.
-
-Think like a master drivability technician:
-- When does it happen?
-- Hot or cold?
-- Under load or idle?
-- Road speed or RPM?
-- Braking or acceleration?
-- Intermittent or constant?
-- Smoke, smell, vibration, overheating, warning lights?
-- What system is being stressed?
+Protect the dominant symptom.
+Do not drift away from the locked diagnostic direction unless later answers clearly contradict it.
 
 Voice:
 Calm.
@@ -44,39 +33,20 @@ Human.
 Mechanically intelligent.
 No filler.
 
-Avoid weak language:
-Do not overuse:
-"maybe"
-"could be"
-"several possibilities"
-"consult a mechanic"
-"hard to say"
-
-Use stronger but honest language:
-"The symptom pattern points to..."
-"The behavior strongly matches..."
-"The locked direction keeps this centered on..."
-"Heat and load are exposing..."
-"The failure behavior fits..."
-
 Truth rule:
 Do not invent measurements.
 Do not invent scan data.
 Do not claim confirmed failed parts.
 Only use data the user provided.
 
-Follow-up rule:
-If the diagnostic context says more data is needed, ask exactly one high-value question.
-Do not ask generic questions.
-Do not repeat earlier questions.
-
-Final report rule:
-If ready for analysis, produce a mechanic-level final report.
+Final report only.
+Do not ask questions in analysis mode.
+Answer options must be None.
 
 Strict output format:
 
 Diagnosis status:
-follow_up or analysis
+analysis
 
 Voice summary:
 One short mechanic sentence.
@@ -97,8 +67,7 @@ What to do next:
 Clear action.
 
 Answer options:
-If follow_up, give exactly 4 short answer options.
-If analysis, write None.
+None
 
 When to stop driving:
 Clear safety instruction.
@@ -110,13 +79,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const {
-      issue,
-      answers,
-      language,
-      vehicleProfile,
-      flowControl,
-    } = req.body;
+    const { issue, answers, language, vehicleProfile, flowControl } = req.body;
 
     const lang = language === "es" ? "es" : "en";
     const safeIssue = String(issue || "").trim();
@@ -137,23 +100,26 @@ export default async function handler(req, res) {
       liveData: liveDataContext,
     });
 
-    const diagnosticContext = buildDiagnosticContext(
-      safeIssue,
-      answerList
-    );
-
-    const forcedFinal = shouldForceFinal({
-      flowControl,
-      hasObdCode,
-      diagnosticContext,
-    });
+    const diagnosticContext = buildDiagnosticContext(safeIssue, answerList);
 
     const readyForAnalysis =
       hasObdCode ||
-      forcedFinal ||
+      shouldForceFinal({ flowControl, hasObdCode }) ||
       diagnosticContext?.readiness?.readyForAnalysis === true;
 
-    const prompt = buildPrompt({
+    // IMPORTANT:
+    // Follow-up mode is handled locally, not by AI.
+    // This prevents the AI from mixing a report with a question.
+    if (!readyForAnalysis) {
+      return res.status(200).json({
+        result: buildFollowUpFromContext({
+          lang,
+          diagnosticContext,
+        }),
+      });
+    }
+
+    const prompt = buildAnalysisPrompt({
       lang,
       issue: safeIssue,
       answers: answerList,
@@ -161,15 +127,14 @@ export default async function handler(req, res) {
       diagnosticContext,
       obdCode,
       obdInsight,
-      readyForAnalysis,
     });
 
     const aiText = await requestOpenAIReport(prompt);
-    const result = cleanResult(aiText, readyForAnalysis);
+    const result = cleanAnalysis(aiText);
 
     if (!result || looksBad(result)) {
       return res.status(200).json({
-        result: buildSafeFallback(lang, readyForAnalysis),
+        result: buildSafeAnalysisFallback(lang),
       });
     }
 
@@ -181,7 +146,7 @@ export default async function handler(req, res) {
   }
 }
 
-function buildPrompt({
+function buildAnalysisPrompt({
   lang,
   issue,
   answers,
@@ -189,7 +154,6 @@ function buildPrompt({
   diagnosticContext,
   obdCode,
   obdInsight,
-  readyForAnalysis,
 }) {
   const userAnswers = answers.length
     ? answers
@@ -198,15 +162,12 @@ function buildPrompt({
             `${i + 1}. ${a.question || "Question"}: ${a.answer || ""}`
         )
         .join("\n")
-    : "No additional answers yet.";
+    : "No additional answers.";
 
   return `${DOCTOR_PROMPT}
 
 Language:
 ${lang === "es" ? "Spanish only" : "English only"}
-
-Mode:
-${readyForAnalysis ? "analysis" : "follow_up"}
 
 Vehicle:
 ${buildVehicleText(vehicleProfile)}
@@ -227,14 +188,203 @@ DriveShift internal diagnostic context:
 ${JSON.stringify(diagnosticContext, null, 2)}
 
 Important:
-- Use the dominant_lock as your diagnostic compass.
-- Use behavior_reasoning to decide the next best question or final reasoning.
-- If Mode is follow_up, ask exactly one question based on behavior_reasoning.next_best_question_goal.
-- If Mode is analysis, do not ask another question.
+- Produce analysis only.
+- Do not ask another question.
+- Answer options must be None.
+- Use dominant_lock as the diagnostic compass.
+- Use behavior_reasoning for mechanical logic.
 - Do not expose JSON to the user.
-- Do not mention "internal context", "dominant lock engine", or "behavior engine" to the user.
+- Do not mention internal engines or internal context.
 - Sound like a real master mechanic.
 `;
+}
+
+function buildFollowUpFromContext({ lang, diagnosticContext }) {
+  const isEs = lang === "es";
+
+  const lock = diagnosticContext?.dominant_lock || {};
+  const behavior = diagnosticContext?.behavior_reasoning || {};
+  const signals = diagnosticContext?.extracted_signals || {};
+  const risk = diagnosticContext?.severity || "medium";
+
+  const goal =
+    behavior?.next_best_question_goal ||
+    "Ask the single question that best separates system direction.";
+
+  const lockedSystem = lock?.locked_system || "general";
+
+  const questionPack = buildQuestionPack({
+    isEs,
+    lockedSystem,
+    signals,
+    goal,
+  });
+
+  return `Diagnosis status: follow_up
+
+Voice summary:
+${questionPack.summary}
+
+Risk level:
+${risk === "high" ? "High" : "Medium"}
+
+Likely issue:
+Pending diagnostic confirmation.
+
+Why it fits:
+${questionPack.why}
+
+What to inspect next:
+${questionPack.question}
+
+What to do next:
+${questionPack.question}
+
+Answer options:
+${questionPack.options.join("\n")}
+
+When to stop driving:
+${questionPack.stop}`;
+}
+
+function buildQuestionPack({ isEs, lockedSystem, signals, goal }) {
+  if (lockedSystem === "fuel_combustion") {
+    return {
+      summary: isEs
+        ? "El patrón apunta a combustión rica o combustible sin quemar."
+        : "The pattern points toward rich combustion or unburned fuel behavior.",
+      why: isEs
+        ? "Humo, olor a combustible o falla bajo carga necesitan separar mezcla rica, misfire y entrega de combustible."
+        : "Smoke, fuel odor, or load-related shaking needs separation between rich running, misfire, and fuel delivery.",
+      question: isEs
+        ? "¿El humo y el olor a combustible empeoran cuando aceleras, o también aparecen en idle?"
+        : "Do the smoke and fuel smell get worse when you accelerate, or do they also happen at idle?",
+      options: isEs
+        ? ["Peor acelerando", "También en idle", "Solo al arrancar", "No sé"]
+        : ["Worse accelerating", "Also at idle", "Only on startup", "Not sure"],
+      stop: isEs
+        ? "Deja de manejar si el olor a combustible es fuerte, la luz check engine parpadea o hay humo pesado."
+        : "Stop driving if the fuel smell is strong, the check engine light flashes, or heavy smoke appears.",
+    };
+  }
+
+  if (lockedSystem === "cooling_overheat") {
+    return {
+      summary: isEs
+        ? "El patrón apunta a riesgo de sobrecalentamiento."
+        : "The pattern points toward an overheating risk.",
+      why: isEs
+        ? "La temperatura y el comportamiento del coolant deciden si es flujo, presión, ventilador o pérdida interna."
+        : "Temperature and coolant behavior separate flow, pressure, fan, and internal coolant-loss problems.",
+      question: isEs
+        ? "¿La temperatura sube en idle, en highway, o en ambos?"
+        : "Does the temperature climb at idle, highway speed, or both?",
+      options: isEs
+        ? ["En idle", "En highway", "En ambos", "No sé"]
+        : ["At idle", "At highway speed", "Both", "Not sure"],
+      stop: isEs
+        ? "Deja de manejar si la temperatura entra en rojo, sale vapor o baja el coolant rápido."
+        : "Stop driving if the temperature reaches red, steam appears, or coolant drops quickly.",
+    };
+  }
+
+  if (lockedSystem === "brake_safety") {
+    return {
+      summary: isEs
+        ? "Primero hay que separar el riesgo de frenos."
+        : "The brake-safety path needs to be separated first.",
+      why: isEs
+        ? "La vibración al frenar puede venir de rotor, pad, hub o problema hidráulico."
+        : "Braking vibration can come from rotor, pad, hub, or hydraulic behavior.",
+      question: isEs
+        ? "¿La vibración se siente más en el volante, el pedal de freno o todo el carro?"
+        : "Do you feel the vibration more in the steering wheel, brake pedal, or whole vehicle?",
+      options: isEs
+        ? ["Volante", "Pedal de freno", "Todo el carro", "No sé"]
+        : ["Steering wheel", "Brake pedal", "Whole vehicle", "Not sure"],
+      stop: isEs
+        ? "Deja de manejar si el pedal se pone suave, el carro jala fuerte o aumenta la distancia de frenado."
+        : "Stop driving if the pedal gets soft, the vehicle pulls hard, or stopping distance increases.",
+    };
+  }
+
+  if (lockedSystem === "electrical_starting") {
+    return {
+      summary: isEs
+        ? "Primero separo no-crank de crank-no-start."
+        : "The starting path needs no-crank vs crank-no-start separation.",
+      why: isEs
+        ? "Click, silencio o crank normal cambian completamente el diagnóstico."
+        : "Clicking, silence, or normal cranking changes the diagnostic path completely.",
+      question: isEs
+        ? "Cuando intentas encender, ¿hace click, gira normal, o no hace nada?"
+        : "When you try to start it, does it click, crank normally, or do nothing?",
+      options: isEs
+        ? ["Solo click", "Gira normal", "No hace nada", "No sé"]
+        : ["Only clicks", "Cranks normally", "No sound", "Not sure"],
+      stop: isEs
+        ? "No sigas intentando si huele a quemado o ves humo."
+        : "Do not keep trying if you smell burning or see smoke.",
+    };
+  }
+
+  if (lockedSystem === "transmission_drivetrain") {
+    return {
+      summary: isEs
+        ? "El patrón apunta a carga, velocidad o tren motriz."
+        : "The pattern points toward load, speed, or drivetrain behavior.",
+      why: isEs
+        ? "Hay que separar si sigue RPM, velocidad del vehículo o carga del acelerador."
+        : "The next step is separating whether it follows RPM, vehicle speed, or throttle load.",
+      question: isEs
+        ? "¿La vibración cambia más con la velocidad del carro, las RPM, o al acelerar?"
+        : "Does the vibration change more with vehicle speed, engine RPM, or throttle load?",
+      options: isEs
+        ? ["Velocidad", "RPM", "Acelerando", "No sé"]
+        : ["Vehicle speed", "Engine RPM", "Throttle load", "Not sure"],
+      stop: isEs
+        ? "Deja de manejar si la vibración se vuelve fuerte o el carro pierde control."
+        : "Stop driving if the vibration becomes severe or the vehicle feels unstable.",
+    };
+  }
+
+  if (signals?.startup_issue) {
+    return {
+      summary: isEs
+        ? "Primero necesito clasificar el arranque."
+        : "I need to classify the starting behavior first.",
+      why: isEs
+        ? "No-crank, crank-no-start y arranca-se-apaga son rutas diferentes."
+        : "No-crank, crank-no-start, and starts-then-dies are different diagnostic paths.",
+      question: isEs
+        ? "¿El motor gira normal, solo hace click, o arranca y se apaga?"
+        : "Does the engine crank normally, only click, or start and then die?",
+      options: isEs
+        ? ["Gira normal", "Solo click", "Arranca y se apaga", "No sé"]
+        : ["Cranks normally", "Only clicks", "Starts then dies", "Not sure"],
+      stop: isEs
+        ? "No sigas intentando si huele a quemado o sale humo."
+        : "Do not keep trying if you smell burning or see smoke.",
+    };
+  }
+
+  return {
+    summary: isEs
+      ? "Necesito una condición más para separar el sistema correcto."
+      : "I need one more condition to separate the correct system.",
+    why: isEs
+      ? goal
+      : goal,
+    question: isEs
+      ? "¿Cuándo aparece más: acelerando, frenando, en idle o después de calentarse?"
+      : "When does it happen most: accelerating, braking, at idle, or after warming up?",
+    options: isEs
+      ? ["Acelerando", "Frenando", "En idle", "Después de calentarse"]
+      : ["Accelerating", "Braking", "At idle", "After warming up"],
+    stop: isEs
+      ? "Deja de manejar si se siente inseguro o aparece luz roja."
+      : "Stop driving if the vehicle feels unsafe or shows a red warning light.",
+  };
 }
 
 async function requestOpenAIReport(prompt) {
@@ -258,7 +408,6 @@ async function requestOpenAIReport(prompt) {
     });
 
     clearTimeout(timeout);
-
     if (!response.ok) return "";
 
     const data = await response.json();
@@ -269,47 +418,33 @@ async function requestOpenAIReport(prompt) {
   }
 }
 
-function shouldForceFinal({ flowControl, hasObdCode, diagnosticContext }) {
+function shouldForceFinal({ flowControl, hasObdCode }) {
   if (hasObdCode) return true;
 
   const decision = String(flowControl?.localDecision || "").toLowerCase();
-
-  if (decision === "final" || decision === "analysis") return true;
-
-  const lockLevel = diagnosticContext?.dominant_lock?.lock_level;
-  const severity = diagnosticContext?.severity;
-
-  if (severity === "high" && lockLevel === "critical") {
-    return false;
-  }
-
-  return false;
+  return decision === "final" || decision === "analysis";
 }
 
-function cleanResult(text, readyForAnalysis) {
+function cleanAnalysis(text) {
   let clean = String(text || "").trim();
   if (!clean) return "";
 
+  clean = clean.replace(
+    /Diagnosis status:\s*follow_up/i,
+    "Diagnosis status: analysis"
+  );
+
   if (!/Diagnosis status:/i.test(clean)) {
-    clean = `Diagnosis status: ${
-      readyForAnalysis ? "analysis" : "follow_up"
-    }\n\n${clean}`;
+    clean = `Diagnosis status: analysis\n\n${clean}`;
   }
 
-  if (readyForAnalysis) {
+  if (/Answer options:/i.test(clean)) {
     clean = clean.replace(
-      /Diagnosis status:\s*follow_up/i,
-      "Diagnosis status: analysis"
+      /Answer options:\s*[\s\S]*?(?=When to stop driving:)/i,
+      "Answer options:\nNone\n\n"
     );
-
-    if (/Answer options:/i.test(clean)) {
-      clean = clean.replace(
-        /Answer options:\s*[\s\S]*?(?=When to stop driving:)/i,
-        "Answer options:\nNone\n\n"
-      );
-    } else {
-      clean += "\n\nAnswer options:\nNone";
-    }
+  } else {
+    clean += "\n\nAnswer options:\nNone";
   }
 
   return clean.trim();
@@ -320,6 +455,7 @@ function looksBad(text) {
 
   return (
     !clean ||
+    clean.includes("diagnosis status: follow_up") ||
     clean.includes("consult a mechanic") ||
     clean.includes("could be many things") ||
     clean.includes("hard to say") ||
@@ -358,35 +494,35 @@ When to stop driving:
 ${isEs ? "Deja de manejar si el vehículo se siente inseguro." : "Stop driving if the vehicle feels unsafe."}`;
 }
 
-function buildSafeFallback(lang, readyForAnalysis) {
+function buildSafeAnalysisFallback(lang) {
   const isEs = lang === "es";
 
-  if (!readyForAnalysis) {
-    return `Diagnosis status: follow_up
+  if (isEs) {
+    return `Diagnosis status: analysis
 
 Voice summary:
-${isEs ? "Necesito una condición más para separar el sistema correcto." : "I need one more condition to separate the right system."}
+DriveShift no pudo completar un informe confiable desde el servidor.
 
 Risk level:
 Medium
 
 Likely issue:
-Pending diagnostic confirmation.
+Error de respuesta diagnóstica del servidor.
 
 Why it fits:
-${isEs ? "El síntoma necesita una condición de carga, temperatura, velocidad o idle." : "The symptom needs one condition: load, temperature, speed, or idle behavior."}
+El cerebro diagnóstico no devolvió un reporte mecánico utilizable.
 
 What to inspect next:
-${isEs ? "¿Cuándo aparece más el problema?" : "When does the problem show up most?"}
+Intenta enviar el mismo síntoma otra vez.
 
 What to do next:
-${isEs ? "Elige la condición más cercana." : "Choose the closest condition."}
+Si se repite, revisa los logs del backend.
 
 Answer options:
-${isEs ? "Acelerando\nFrenando\nDespués de calentarse\nEn idle" : "Accelerating\nBraking\nAfter warming up\nAt idle"}
+None
 
 When to stop driving:
-${isEs ? "Deja de manejar si hay humo, olor a combustible, sobrecalentamiento o luz roja." : "Stop driving if there is smoke, fuel smell, overheating, or a red warning light."}`;
+Deja de manejar si el vehículo se siente inseguro, se sobrecalienta, huele a combustible o quemado, pierde potencia fuerte, vibra demasiado o muestra una luz roja.`;
   }
 
   return `Diagnosis status: analysis
@@ -453,7 +589,6 @@ function buildVehicleText(profile) {
   if (!profile || typeof profile !== "object") return "Unknown vehicle.";
 
   const parts = [];
-
   if (profile.year) parts.push(`Year: ${profile.year}`);
   if (profile.make) parts.push(`Make: ${profile.make}`);
   if (profile.model) parts.push(`Model: ${profile.model}`);
