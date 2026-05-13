@@ -164,6 +164,13 @@ function buildAnalysisPrompt({
         .join("\n")
     : "No additional answers.";
 
+  const mechanical = diagnosticContext?.mechanical_prioritization || {};
+  const primary = mechanical?.primary || {};
+  const secondary = Array.isArray(mechanical?.secondary)
+    ? mechanical.secondary
+    : [];
+  const safety = mechanical?.safety || {};
+
   return `${DOCTOR_PROMPT}
 
 Language:
@@ -187,18 +194,50 @@ ${obdInsight || "None"}
 DriveShift internal diagnostic context:
 ${JSON.stringify(diagnosticContext, null, 2)}
 
-Important:
-- Produce analysis only.
+Mechanical prioritization:
+Primary direction:
+${primary.title || "None"}
+
+Primary mechanic summary:
+${primary.mechanic_summary || "None"}
+
+Why primary:
+${primary.why_primary || "None"}
+
+Verification focus:
+${
+  Array.isArray(primary.verification_focus)
+    ? primary.verification_focus.map((x, i) => `${i + 1}. ${x}`).join("\n")
+    : "None"
+}
+
+Secondary directions:
+${
+  secondary.length
+    ? secondary.map((x, i) => `${i + 1}. ${x.title}: ${x.mechanic_summary}`).join("\n")
+    : "None"
+}
+
+Safety level:
+${safety.level || "Medium"}
+
+Safety instruction:
+${safety.instruction || "Use realistic safety judgment."}
+
+Critical writing rules:
+- Lead with the Primary direction.
+- Do not write weak “A or B” language as the main diagnosis.
+- Mention secondary paths only as verification or supporting alternatives.
+- Use the safety instruction exactly in meaning, but write it naturally.
+- Keep the report compressed, premium, and mechanic-level.
+- Do not over-explain.
 - Do not ask another question.
 - Answer options must be None.
-- Use dominant_lock as the diagnostic compass.
-- Use behavior_reasoning for mechanical logic.
 - Do not expose JSON to the user.
-- Do not mention internal engines or internal context.
+- Do not mention internal engines, internal context, or prioritization engine.
 - Sound like a real master mechanic.
 `;
 }
-
 function buildFollowUpFromContext({ lang, diagnosticContext }) {
   const isEs = lang === "es";
 
