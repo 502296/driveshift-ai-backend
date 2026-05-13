@@ -2,6 +2,7 @@ import { extractSignals } from "./signal-extractor.js";
 import { buildDominantLock } from "./dominant-lock-engine.js";
 import { buildBehaviorReasoning } from "./behavior-reasoning-engine.js";
 
+import { buildMechanicalPrioritization } from "./mechanical-prioritization-engine.js";
 export function countUserAnswers(answers) {
   if (!Array.isArray(answers)) return 0;
 
@@ -192,6 +193,17 @@ export function buildDiagnosticContext(issue, answers = []) {
     dominant_lock: dominantLock,
   });
 
+  const mechanicalPrioritization = buildMechanicalPrioritization({
+  raw_input: combined,
+  extracted_signals: extracted.signals,
+  dominant_systems: extracted.dominant_systems,
+  severity: extracted.severity,
+  risk_flags: extracted.risk_flags,
+  dominant_signals: dominantSignals,
+  dominant_lock: dominantLock,
+  behavior_reasoning: behaviorReasoning,
+});
+
   return {
     raw_input: combined,
     extracted_signals: extracted.signals,
@@ -203,6 +215,7 @@ export function buildDiagnosticContext(issue, answers = []) {
     readiness,
     dominant_lock: dominantLock,
     behavior_reasoning: behaviorReasoning,
+    mechanical_prioritization: mechanicalPrioritization,
   };
 }
 
