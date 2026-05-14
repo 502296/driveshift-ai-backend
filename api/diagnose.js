@@ -25,7 +25,7 @@ Diagnostic Protocol:
 - Analyze the "Operating Environment": Load, temperature, and RPM are your primary data points.
 
 CRITICAL TONE & REALISM RULES:
-- Use "Industrial Grade" terminology (e.g., instead of "Dangerous Smart," use "Technically Authoritative").
+- Use "Industrial Grade" terminology.
 - Zero hesitation. Do not use "suggests" or "indicates." Use "The data confirms" or "The behavior is consistent with."
 - No cinematic flair. Keep it grounded in the workshop, not a movie set.
 - Speak like a Chief Foreman who has seen every possible failure mode since the internal combustion engine was invented.
@@ -42,19 +42,19 @@ Diagnosis status:
 analysis
 
 Voice summary:
-A clinical, high-level summary of the mechanical state. (e.g., "Total loss of oil film strength in cylinder three.")
+A clinical, high-level summary of the mechanical state.
 
 Risk level:
 Low / Medium / High / Critical (Immediate Shutdown)
 
 Likely issue:
-The precise mechanical failure mechanism. (e.g., "Exhaust valve recession leading to compression loss.")
+The precise mechanical failure mechanism.
 
 Why it fits:
 Mechanical Correlation: Connect the user's symptoms to the underlying physical failure with zero fluff.
 
 What to inspect next:
-Professional-grade diagnostic steps (e.g., "Cylinder leak-down test" or "Oscilloscope wave-form analysis of the crank sensor").
+Professional-grade diagnostic steps.
 
 What to do next:
 The definitive corrective action path.
@@ -65,6 +65,7 @@ None
 When to stop driving:
 A hard, fact-based safety limit.
 `;
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ result: "Method not allowed" });
@@ -80,6 +81,20 @@ export default async function handler(req, res) {
     if (!safeIssue) {
       return res.status(200).json({
         result: buildEmptyFollowUp(lang),
+      });
+    }
+
+    const simpleIntent = detectSimpleIntent(safeIssue);
+
+    if (simpleIntent === "greeting") {
+      return res.status(200).json({
+        result: buildGreetingResponse(lang),
+      });
+    }
+
+    if (simpleIntent === "general_help") {
+      return res.status(200).json({
+        result: buildGeneralHelpResponse(lang),
       });
     }
 
@@ -99,9 +114,6 @@ export default async function handler(req, res) {
       shouldForceFinal({ flowControl, hasObdCode }) ||
       diagnosticContext?.readiness?.readyForAnalysis === true;
 
-    // IMPORTANT:
-    // Follow-up mode is handled locally, not by AI.
-    // This prevents the AI from mixing a report with a question.
     if (!readyForAnalysis) {
       return res.status(200).json({
         result: buildFollowUpFromContext({
@@ -136,6 +148,206 @@ export default async function handler(req, res) {
       result: buildErrorFallback(),
     });
   }
+}
+
+function detectSimpleIntent(text) {
+  const raw = String(text || "").trim();
+  const clean = raw
+    .toLowerCase()
+    .replace(/[.,!?؟،]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!clean) return "empty";
+
+  if (extractObdCode(clean)) return "vehicle_problem";
+
+  const vehicleWords = [
+    "car",
+    "vehicle",
+    "engine",
+    "transmission",
+    "brake",
+    "brakes",
+    "tire",
+    "tires",
+    "battery",
+    "alternator",
+    "starter",
+    "noise",
+    "sound",
+    "shake",
+    "shaking",
+    "vibration",
+    "vibrates",
+    "smoke",
+    "fuel",
+    "gas",
+    "oil",
+    "coolant",
+    "overheat",
+    "overheating",
+    "warning",
+    "light",
+    "check engine",
+    "abs",
+    "airbag",
+    "steering",
+    "suspension",
+    "idle",
+    "rpm",
+    "start",
+    "starts",
+    "starting",
+    "won't start",
+    "no start",
+    "misfire",
+    "stall",
+    "stalls",
+    "stalled",
+    "dies",
+    "leak",
+    "leaking",
+    "burning",
+    "smell",
+    "throttle",
+    "acceleration",
+    "accelerating",
+    "crank",
+    "click",
+    "clunk",
+    "grind",
+    "grinding",
+    "coche",
+    "carro",
+    "auto",
+    "motor",
+    "freno",
+    "frenos",
+    "batería",
+    "bateria",
+    "arranca",
+    "enciende",
+    "humo",
+    "gasolina",
+    "aceite",
+    "sobrecalienta",
+    "vibra",
+    "vibración",
+    "vibracion",
+    "ruido",
+    "luz",
+    "testigo",
+  ];
+
+  const hasVehicleSignal = vehicleWords.some((word) => clean.includes(word));
+  if (hasVehicleSignal) return "vehicle_problem";
+
+  const greetings = [
+    "hi",
+    "hello",
+    "hey",
+    "hey there",
+    "good morning",
+    "good afternoon",
+    "good evening",
+    "how are you",
+    "whats up",
+    "what's up",
+    "hola",
+    "buenos dias",
+    "buenos días",
+    "buenas tardes",
+    "buenas noches",
+  ];
+
+  if (greetings.includes(clean) || clean.length <= 12 && greetings.some((g) => clean === g)) {
+    return "greeting";
+  }
+
+  const generalHelpPhrases = [
+    "can you help me",
+    "i need help",
+    "help me",
+    "i have a question",
+    "question",
+    "need help",
+    "puedes ayudarme",
+    "necesito ayuda",
+    "ayudame",
+    "ayúdame",
+    "tengo una pregunta",
+  ];
+
+  if (generalHelpPhrases.includes(clean)) {
+    return "general_help";
+  }
+
+  if (clean.split(" ").length <= 4 && !hasVehicleSignal) {
+    return "general_help";
+  }
+
+  return "vehicle_problem";
+}
+
+function buildGreetingResponse(lang) {
+  const isEs = lang === "es";
+
+  return `Diagnosis status: follow_up
+
+Voice summary:
+${isEs ? "Hola. Dime qué está haciendo el vehículo y te ayudo a diagnosticarlo." : "Hey. Tell me what the vehicle is doing and I’ll help you diagnose it."}
+
+Risk level:
+Low
+
+Likely issue:
+Pending vehicle symptom.
+
+Why it fits:
+${isEs ? "El usuario saludó sin describir todavía un problema del vehículo." : "The user greeted DriveShift without describing a vehicle problem yet."}
+
+What to inspect next:
+${isEs ? "Describe el síntoma principal del vehículo." : "Describe the vehicle’s main symptom."}
+
+What to do next:
+${isEs ? "Escribe qué pasa, cuándo ocurre y si hay luces de advertencia." : "Tell me what happens, when it happens, and whether any warning lights are on."}
+
+Answer options:
+${isEs ? "No enciende\nVibra\nLuz de advertencia\nRuido extraño" : "Won’t start\nShaking\nWarning light\nStrange noise"}
+
+When to stop driving:
+${isEs ? "Deja de manejar si el vehículo se siente inseguro." : "Stop driving if the vehicle feels unsafe."}`;
+}
+
+function buildGeneralHelpResponse(lang) {
+  const isEs = lang === "es";
+
+  return `Diagnosis status: follow_up
+
+Voice summary:
+${isEs ? "Claro. Dime el síntoma principal del vehículo y empezamos." : "Of course. Tell me the vehicle’s main symptom and we’ll start."}
+
+Risk level:
+Low
+
+Likely issue:
+Pending vehicle symptom.
+
+Why it fits:
+${isEs ? "El mensaje pide ayuda, pero todavía no incluye un síntoma mecánico específico." : "The message asks for help but does not include a specific mechanical symptom yet."}
+
+What to inspect next:
+${isEs ? "Describe qué está haciendo el vehículo." : "Describe what the vehicle is doing."}
+
+What to do next:
+${isEs ? "Puedes escribir algo como: no enciende, vibra, huele a gasolina, hace ruido o muestra una luz." : "You can write something like: won’t start, shaking, fuel smell, strange noise, or warning light."}
+
+Answer options:
+${isEs ? "No enciende\nVibra\nHuele a combustible\nLuz de advertencia" : "Won’t start\nShaking\nFuel smell\nWarning light"}
+
+When to stop driving:
+${isEs ? "Deja de manejar si el vehículo se siente inseguro." : "Stop driving if the vehicle feels unsafe."}`;
 }
 
 function buildAnalysisPrompt({
@@ -206,7 +418,9 @@ ${
 Secondary directions:
 ${
   secondary.length
-    ? secondary.map((x, i) => `${i + 1}. ${x.title}: ${x.mechanic_summary}`).join("\n")
+    ? secondary
+        .map((x, i) => `${i + 1}. ${x.title}: ${x.mechanic_summary}`)
+        .join("\n")
     : "None"
 }
 
@@ -230,6 +444,7 @@ Critical writing rules:
 - Sound like a real master mechanic.
 `;
 }
+
 function buildFollowUpFromContext({ lang, diagnosticContext }) {
   const isEs = lang === "es";
 
@@ -403,9 +618,7 @@ function buildQuestionPack({ isEs, lockedSystem, signals, goal }) {
     summary: isEs
       ? "Necesito una condición más para separar el sistema correcto."
       : "I need one more condition to separate the correct system.",
-    why: isEs
-      ? goal
-      : goal,
+    why: goal,
     question: isEs
       ? "¿Cuándo aparece más: acelerando, frenando, en idle o después de calentarse?"
       : "When does it happen most: accelerating, braking, at idle, or after warming up?",
