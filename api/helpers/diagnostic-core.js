@@ -1,8 +1,8 @@
 import { extractSignals } from "./signal-extractor.js";
 import { buildDominantLock } from "./dominant-lock-engine.js";
 import { buildBehaviorReasoning } from "./behavior-reasoning-engine.js";
-
 import { buildMechanicalPrioritization } from "./mechanical-prioritization-engine.js";
+
 export function countUserAnswers(answers) {
   if (!Array.isArray(answers)) return 0;
 
@@ -23,12 +23,18 @@ export function detectDominantSignals(issue, answers) {
   const extracted = extractSignals(combined);
   const signals = [];
 
+  const ignitionFuelLock = buildIgnitionFuelDominance(combined);
+  if (ignitionFuelLock.locked) {
+    signals.push("dominant ignition/fuel combustion failure");
+    signals.push("load-sensitive combustion breakdown");
+  }
+
   const rules = [
     { label: "black smoke / rich running", words: ["black smoke", "dark smoke", "running rich"] },
-    { label: "fuel smell / raw fuel", words: ["fuel smell", "gas smell", "raw fuel", "smells like gas", "gasoline smell", "strong fuel"] },
-    { label: "misfire / shaking", words: ["misfire", "rough under load", "engine feels rough", "rough idle", "shaking", "vibration", "jerking"] },
-    { label: "severe power loss", words: ["loss of power", "loses power", "no power", "limp mode", "won't accelerate", "weak acceleration", "hesitating"] },
-    { label: "flashing check engine", words: ["flashing check engine", "check engine light flashes", "cel flashes", "flashes briefly"] },
+    { label: "fuel smell / raw fuel", words: ["fuel smell", "gas smell", "raw fuel", "smells like gas", "gasoline smell", "strong fuel", "rich smell", "unburned fuel"] },
+    { label: "misfire / shaking", words: ["misfire", "rough under load", "engine feels rough", "rough idle", "shaking", "vibration", "jerking", "shakes under acceleration", "shaking under acceleration"] },
+    { label: "severe power loss", words: ["loss of power", "loses power", "no power", "limp mode", "won't accelerate", "weak acceleration", "hesitating", "loss of throttle response", "loses throttle response"] },
+    { label: "flashing check engine", words: ["flashing check engine", "check engine light flashes", "cel flashes", "flashes briefly", "flashing cel"] },
     { label: "overheating / cooling risk", words: ["overheat", "overheating", "temperature high", "temp gauge", "steam", "coolant"] },
     { label: "burning smell / smoke safety risk", words: ["burning smell", "smells burnt", "burnt smell", "smoke from engine", "electrical burning"] },
     { label: "brake safety risk", words: ["brake", "brakes", "low brake pedal", "soft brake pedal", "brake fluid", "grinding brakes"] },
@@ -51,9 +57,21 @@ export function detectDominantSignals(issue, answers) {
     }
   }
 
-  if (extracted.signals.overheating) signals.push("critical overheating behavior");
-  if (extracted.signals.smoke && extracted.signals.fuel_smell) signals.push("raw fuel combustion failure");
-  if (extracted.signals.vibration && extracted.signals.load_sensitive) signals.push("load-sensitive drivetrain behavior");
+  if (extracted.signals.overheating && !ignitionFuelLock.suppressCoolingBias) {
+    signals.push("critical overheating behavior");
+  }
+
+  if (extracted.signals.smoke && extracted.signals.fuel_smell) {
+    signals.push("raw fuel combustion failure");
+  }
+
+  if (extracted.signals.vibration && extracted.signals.load_sensitive) {
+    signals.push("load-sensitive drivetrain behavior");
+  }
+
+  if (ignitionFuelLock.locked) {
+    signals.push("cooling-system drift suppressed unless overheating/coolant evidence is confirmed");
+  }
 
   return [...new Set(signals)];
 }
@@ -61,12 +79,21 @@ export function detectDominantSignals(issue, answers) {
 export function detectComplexity(issue, dominantSignals, answers) {
   const text = buildCombinedText(issue, answers);
   const signalCount = Array.isArray(dominantSignals) ? dominantSignals.length : 0;
+  const ignitionFuelLock = buildIgnitionFuelDominance(text);
 
   if (isAdvancedCase(text)) {
     return {
       level: "advanced technician diagnostic case",
       minimumQuestions: 3,
       reason: "advanced diagnostic cases need three focused technical questions before final analysis",
+    };
+  }
+
+  if (ignitionFuelLock.locked) {
+    return {
+      level: "dominant ignition/fuel combustion failure",
+      minimumQuestions: 2,
+      reason: "flashing check engine, rich exhaust smell, and load-sensitive shaking create a strong combustion failure path",
     };
   }
 
@@ -96,6 +123,7 @@ export function detectComplexity(issue, dominantSignals, answers) {
 export function detectDiagnosticReadiness(issue, answers, dominantSignals, complexity) {
   const answerCount = countUserAnswers(answers);
   const text = buildCombinedText(issue, answers);
+  const ignitionFuelLock = buildIgnitionFuelDominance(text);
 
   let minimumQuestions = complexity?.minimumQuestions || 2;
   let reason = complexity?.reason || "standard diagnostic flow";
@@ -130,7 +158,7 @@ export function detectDiagnosticReadiness(issue, answers, dominantSignals, compl
 
   const hasObviousFuelPattern =
     includesAny(text, ["black smoke"]) &&
-    includesAny(text, ["fuel smell", "gas smell", "raw fuel", "smells like gas"]);
+    includesAny(text, ["fuel smell", "gas smell", "raw fuel", "smells like gas", "rich smell", "unburned fuel"]);
 
   const hasFlowControl = Array.isArray(answers)
     ? answers.some((a) =>
@@ -155,6 +183,11 @@ export function detectDiagnosticReadiness(issue, answers, dominantSignals, compl
     reason = "strong diagnostic signals need a real multi-step flow before final report";
   }
 
+  if (ignitionFuelLock.locked) {
+    minimumQuestions = 2;
+    reason = "dominant ignition/fuel failure path confirmed by load-sensitive shaking, rich exhaust smell, and flashing check engine behavior";
+  }
+
   minimumQuestions = clamp(minimumQuestions, 2, 3);
 
   return {
@@ -167,6 +200,7 @@ export function detectDiagnosticReadiness(issue, answers, dominantSignals, compl
 export function buildDiagnosticContext(issue, answers = []) {
   const combined = buildCombinedText(issue, answers);
   const extracted = extractSignals(combined);
+  const ignitionFuelLock = buildIgnitionFuelDominance(combined);
 
   const dominantSignals = detectDominantSignals(issue, answers);
   const complexity = detectComplexity(issue, dominantSignals, answers);
@@ -194,15 +228,15 @@ export function buildDiagnosticContext(issue, answers = []) {
   });
 
   const mechanicalPrioritization = buildMechanicalPrioritization({
-  raw_input: combined,
-  extracted_signals: extracted.signals,
-  dominant_systems: extracted.dominant_systems,
-  severity: extracted.severity,
-  risk_flags: extracted.risk_flags,
-  dominant_signals: dominantSignals,
-  dominant_lock: dominantLock,
-  behavior_reasoning: behaviorReasoning,
-});
+    raw_input: combined,
+    extracted_signals: extracted.signals,
+    dominant_systems: extracted.dominant_systems,
+    severity: extracted.severity,
+    risk_flags: extracted.risk_flags,
+    dominant_signals: dominantSignals,
+    dominant_lock: dominantLock,
+    behavior_reasoning: behaviorReasoning,
+  });
 
   return {
     raw_input: combined,
@@ -216,6 +250,7 @@ export function buildDiagnosticContext(issue, answers = []) {
     dominant_lock: dominantLock,
     behavior_reasoning: behaviorReasoning,
     mechanical_prioritization: mechanicalPrioritization,
+    ignition_fuel_dominance: ignitionFuelLock,
   };
 }
 
@@ -236,6 +271,127 @@ function buildCombinedText(issue, answers) {
   ]
     .join(" ")
     .toLowerCase();
+}
+
+function buildIgnitionFuelDominance(text) {
+  const raw = String(text || "").toLowerCase();
+
+  let ignitionFuelScore = 0;
+  let coolingScore = 0;
+
+  const hasFlashingCel = includesAny(raw, [
+    "flashing check engine",
+    "check engine light flashes",
+    "cel flashes",
+    "flashes briefly",
+    "flashing cel",
+  ]);
+
+  const hasRichOrFuelSmell = includesAny(raw, [
+    "rich smell",
+    "smells rich",
+    "unburned fuel",
+    "raw fuel",
+    "fuel smell",
+    "gas smell",
+    "gasoline smell",
+    "smells like gas",
+    "strong fuel",
+  ]);
+
+  const hasLoadSensitiveShake = includesAny(raw, [
+    "under load",
+    "heavy throttle",
+    "acceleration",
+    "accelerating",
+    "uphill",
+    "worse under acceleration",
+    "worse under load",
+    "shakes under acceleration",
+    "shaking under acceleration",
+    "rough under load",
+    "loses throttle response",
+    "loss of throttle response",
+    "hesitating",
+  ]);
+
+  const hasMisfireBehavior = includesAny(raw, [
+    "misfire",
+    "shaking",
+    "engine shakes",
+    "rough idle",
+    "jerking",
+    "vibration",
+  ]);
+
+  const hasWarmOnlyFailure = includesAny(raw, [
+    "after warming up",
+    "fully warms up",
+    "warm engine",
+    "when warm",
+    "after 20 minutes",
+    "after driving",
+  ]);
+
+  const hasConfirmedOverheating = includesAny(raw, [
+    "overheating",
+    "overheats",
+    "temperature high",
+    "temp gauge rises",
+    "temperature gauge rises",
+    "steam",
+    "coolant loss",
+    "losing coolant",
+    "sweet smell",
+    "coolant smell",
+  ]);
+
+  const hasCoolingNegation = includesAny(raw, [
+    "no overheating",
+    "temperature stays normal",
+    "temp stays normal",
+    "no coolant loss",
+    "no steam",
+    "no sweet smell",
+  ]);
+
+  if (hasFlashingCel) ignitionFuelScore += 10;
+  if (hasRichOrFuelSmell) ignitionFuelScore += 8;
+  if (hasLoadSensitiveShake) ignitionFuelScore += 8;
+  if (hasMisfireBehavior) ignitionFuelScore += 6;
+  if (hasWarmOnlyFailure) ignitionFuelScore += 2;
+
+  if (hasConfirmedOverheating) coolingScore += 8;
+  if (hasCoolingNegation) coolingScore -= 8;
+
+  const locked =
+    ignitionFuelScore >= 16 &&
+    ignitionFuelScore >= coolingScore + 6;
+
+  const suppressCoolingBias =
+    locked &&
+    !hasConfirmedOverheating &&
+    hasCoolingNegation;
+
+  return {
+    locked,
+    dominant_system: locked ? "ignition_fuel_combustion_failure" : "undetermined",
+    ignition_fuel_score: ignitionFuelScore,
+    cooling_score: coolingScore,
+    suppressCoolingBias,
+    evidence: {
+      hasFlashingCel,
+      hasRichOrFuelSmell,
+      hasLoadSensitiveShake,
+      hasMisfireBehavior,
+      hasWarmOnlyFailure,
+      hasConfirmedOverheating,
+      hasCoolingNegation,
+    },
+    mechanic_rule: locked
+      ? "Do not route this case toward cooling system unless overheating, coolant loss, steam, or sweet coolant smell is confirmed. Prioritize ignition breakdown under cylinder pressure, injector leakage, fuel control error, coil/plug failure, and misfire under load."
+      : "No ignition/fuel dominance lock applied.",
+  };
 }
 
 function isSafetySensitive(text) {
