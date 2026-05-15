@@ -588,8 +588,8 @@ A vehicle symptom is required before a mechanical failure path can be isolated.
 async function requestOpenAIReport(prompt) {
   return requestOpenAIReportWithSettings({
     prompt,
-    temperature: 0.06,
-    maxTokens: 1500,
+    temperature: 0.12,
+    maxTokens: 1600,
     timeoutMs: 18000,
   });
 }
