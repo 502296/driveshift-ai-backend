@@ -14,10 +14,79 @@ export function parseLiveDataContext(text) {
   };
 }
 
-export function buildObdInsight({ code, liveData }) {
-  const safeCode = String(code || "").toUpperCase().trim();
+export function extractObdCodes(input) {
+  const raw = String(input || "").toUpperCase();
+  const matches = raw.match(/\b[PCBU][0-9A-F]{4}\b/g) || [];
+  return [...new Set(matches)];
+}
 
-  if (!safeCode) {
+function getCodeFamily(code) {
+  if (/^P03/.test(code)) return "misfire";
+  if (/^P017|^P01/.test(code)) return "air_fuel";
+  if (/^P04|^P0420|^P0430/.test(code)) return "emissions";
+  if (/^P05|^P056/.test(code)) return "voltage_speed_idle";
+  if (/^P07/.test(code)) return "transmission";
+  if (/^U/.test(code)) return "network";
+  if (/^C/.test(code)) return "chassis";
+  if (/^B/.test(code)) return "body";
+  return "general";
+}
+
+function getCodePriority(code) {
+  if (/^P0562|^P0563/.test(code)) return 100;
+  if (/^U/.test(code)) return 90;
+  if (/^P0335|^P0340/.test(code)) return 88;
+  if (/^P0300|^P030[1-8]/.test(code)) return 84;
+  if (/^P0171|^P0172|^P0174|^P0175/.test(code)) return 82;
+  if (/^P020/.test(code)) return 80;
+  if (/^P0700|^P07/.test(code)) return 78;
+  if (/^P0420|^P0430/.test(code)) return 62;
+  if (/^P044/.test(code)) return 45;
+  return 50;
+}
+
+function buildMultipleCodeRelationship(codes) {
+  const families = codes.map(getCodeFamily);
+
+  const hasMisfire = families.includes("misfire");
+  const hasAirFuel = families.includes("air_fuel");
+  const hasCatalyst = codes.some((c) => c === "P0420" || c === "P0430");
+  const hasVoltage = codes.some((c) => c === "P0562" || c === "P0563");
+  const hasNetwork = families.includes("network");
+  const hasTransmission = families.includes("transmission");
+
+  if (hasVoltage || hasNetwork) {
+    return "Voltage or communication faults can trigger misleading secondary codes. Confirm battery, charging voltage, grounds, and module communication before replacing sensors.";
+  }
+
+  if (hasMisfire && hasAirFuel && hasCatalyst) {
+    return "The codes form a connected chain: air/fuel imbalance can cause misfire, and repeated misfire or rich/lean operation can stress the catalytic converter. Diagnose fuel control and misfire before condemning the catalyst.";
+  }
+
+  if (hasMisfire && hasAirFuel) {
+    return "The codes are likely related: fuel mixture imbalance can create misfire symptoms. Diagnose intake leaks, fuel delivery, ignition strength, injector function, and fuel trims as one combined condition.";
+  }
+
+  if (hasMisfire && hasCatalyst) {
+    return "The catalyst code may be a result of repeated misfire or incomplete combustion. Fix the misfire path first before judging catalytic converter condition.";
+  }
+
+  if (hasAirFuel && hasCatalyst) {
+    return "The catalyst code may be downstream damage or a reaction to long-term fuel control problems. Diagnose lean/rich condition, exhaust leaks, and oxygen sensor behavior first.";
+  }
+
+  if (hasTransmission) {
+    return "Transmission codes should be handled as a separate system unless engine performance codes are also affecting torque, shifting, or limp mode.";
+  }
+
+  return "Multiple codes were detected. Treat them as one vehicle condition first, then separate them only if they point to unrelated systems.";
+}
+
+export function buildObdInsight({ code, liveData }) {
+  const codes = extractObdCodes(code);
+  const safeCode = codes[0] || String(code || "").toUpperCase().trim();
+
+  if (!codes.length && !safeCode) {
     return "No confirmed OBD diagnostic code was detected. Live data should be used only as supporting context, not as a final diagnosis.";
   }
 
@@ -31,14 +100,41 @@ export function buildObdInsight({ code, liveData }) {
   const coolantState = analyzeCoolantState({ coolant });
   const movementState = analyzeMovementState({ speed });
 
-  const codeInsight = getCodeInsight(safeCode);
-
   const contextNotes = [
     engineState,
     batteryState,
     coolantState,
     movementState,
   ].filter(Boolean);
+
+  if (codes.length > 1) {
+    const sortedCodes = [...codes].sort(
+      (a, b) => getCodePriority(b) - getCodePriority(a)
+    );
+
+    const primaryCode = sortedCodes[0];
+    const supportingCodes = sortedCodes.slice(1);
+
+    const primaryInsight = getCodeInsight(primaryCode);
+    const supportingInsights = supportingCodes
+      .map((c) => `${c}: ${getCodeInsight(c)}`)
+      .join(" ");
+
+    const relationship = buildMultipleCodeRelationship(sortedCodes);
+
+    return [
+      `Confirmed multiple OBD codes detected: ${sortedCodes.join(", ")}.`,
+      `Primary diagnostic direction: ${primaryCode}: ${primaryInsight}`,
+      supportingCodes.length ? `Supporting codes: ${supportingInsights}` : "",
+      `Code relationship: ${relationship}`,
+      `Live-data context: ${contextNotes.join(" ")}`,
+      "Analyze all codes together as one vehicle condition. Do not diagnose each code separately unless the systems are clearly unrelated. Identify the root or dominant fault first, then explain which codes may be secondary effects.",
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  const codeInsight = getCodeInsight(safeCode);
 
   return [
     `Confirmed OBD code ${safeCode}: ${codeInsight}`,
