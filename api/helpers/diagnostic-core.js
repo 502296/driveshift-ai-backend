@@ -21,6 +21,15 @@ export function countUserAnswers(answers) {
 export function detectDominantSignals(issue, answers) {
   const combined = buildCombinedText(issue, answers);
   const extracted = extractSignals(combined);
+  const coolingDenied =
+  includesAny(combined, [
+    "no overheating",
+    "temperature stays normal",
+    "temperature normal",
+    "no coolant loss",
+    "no steam",
+    "no sweet smell",
+  ]);
   const signals = [];
 
   const ignitionFuelLock = buildIgnitionFuelDominance(combined);
