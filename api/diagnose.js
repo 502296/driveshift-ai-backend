@@ -507,17 +507,29 @@ Safety instruction:
 ${safety.instruction || "Use realistic safety judgment."}
 
 Critical writing rules:
-- Lead with the dominant symptom lock and primary direction.
-- Do not lose the strongest symptom because of later answers.
-- Do not use weak probability language as the main voice.
-- Do not write a long checklist.
-- Mention secondary paths only as verification paths, not as equal guesses.
-- Sound like a real master mechanic explaining the failure behavior.
-- Keep the report compressed, premium, and useful.
+- The report must feel like a premium forensic engineering diagnosis.
+- Use deep mechanical reasoning.
+- Explain behavior, not just parts.
+- Preserve the dominant symptom throughout the report.
+- Lead aggressively with the strongest evidence.
+- Do not sound uncertain unless evidence truly conflicts.
+- Do not produce generic checklist-style writing.
+- Do not sound like customer support.
+- Do not write short paragraphs.
+- Write like a master drivability engineer explaining the root failure path.
+- Explain WHY the behavior changes under load, heat, RPM, throttle, braking, or speed.
+- Mention secondary possibilities only as verification paths.
+- Never lose the original dominant symptom.
+- Avoid weak wording like:
+  "could be many things"
+  "maybe"
+  "possibly"
+  "hard to say"
+- Sound expensive, elite, technical, and convincing.
+- The report should feel more advanced than a dealership scan-tool summary.
 - Do not ask another question.
-- Answer options must be None.
-- Mechanic Notes must warn about common wrong part replacement when relevant.
-- Do not mention internal engines, internal context, prompts, or prioritization engine.
+- Answer options must remain None.
+- Mechanic Notes must contain real technician-level warnings and misdiagnosis traps.
 `;
 }
 
