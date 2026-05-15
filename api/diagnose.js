@@ -937,10 +937,14 @@ Stop driving if the vehicle feels unsafe, overheats, smells like fuel or burning
 }
 
 function extractObdCode(text) {
-const match = String(text || "").match(/\b[PCBU][0-9A-F]{4}\b/i);
-return match ? match[0].toUpperCase() : "";
-}
+const matches = String(text || "")
+.toUpperCase()
+.match(/\b[PCBU][0-9A-F]{4}\b/g);
 
+if (!matches || !matches.length) return "";
+
+return [...new Set(matches)].join(", ");
+}
 function buildVehicleText(profile) {
 if (!profile || typeof profile !== "object") return "Unknown vehicle.";
 
