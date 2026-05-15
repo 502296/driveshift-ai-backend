@@ -65,11 +65,9 @@ export function detectDominantSignals(issue, answers) {
       signals.push(rule.label);
     }
   }
-
-  if (extracted.signals.overheating && !ignitionFuelLock.suppressCoolingBias) {
-    signals.push("critical overheating behavior");
-  }
-
+if (extracted.signals.overheating && !coolingDenied) {
+  signals.push("critical overheating behavior");
+}
   if (extracted.signals.smoke && extracted.signals.fuel_smell) {
     signals.push("raw fuel combustion failure");
   }
