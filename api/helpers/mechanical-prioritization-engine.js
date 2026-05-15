@@ -1,7 +1,8 @@
-// DriveShift Mechanical Prioritization Engine v1
+// DriveShift Mechanical Prioritization Engine v2
 // Purpose:
-// Convert signals + dominant lock + behavior reasoning into a mechanic-level priority order.
-// This prevents weak "A or B" reports and gives the AI a clear diagnostic hierarchy.
+// Build a strong mechanic-level diagnostic hierarchy.
+// This file protects the dominant symptom, prevents weak "A or B" reports,
+// and gives the final AI report a clear master-technician direction.
 
 function hasSignal(signals = {}, key) {
   return signals[key] === true;
@@ -38,72 +39,111 @@ function buildFuelCombustionPriority(context = {}) {
 
   const priorities = [];
 
-  const hasSmoke = hasSignal(signals, "smoke") || hasText(raw, ["black smoke", "dark smoke"]);
+  const hasSmoke =
+    hasSignal(signals, "smoke") ||
+    hasText(raw, ["black smoke", "dark smoke", "humo negro"]);
+
+  const hasBlackSmoke = hasText(raw, ["black smoke", "dark smoke", "humo negro"]);
+
   const hasFuelSmell =
     hasSignal(signals, "fuel_smell") ||
-    hasText(raw, ["fuel smell", "gas smell", "raw fuel", "gasoline smell"]);
+    hasText(raw, [
+      "fuel smell",
+      "gas smell",
+      "raw fuel",
+      "gasoline smell",
+      "smells like gas",
+      "strong fuel",
+      "unburned fuel",
+    ]);
 
   const loadSensitive =
     hasSignal(signals, "load_sensitive") ||
     behaviors.includes("load_sensitive_failure") ||
-    hasText(raw, ["heavy throttle", "under load", "uphill", "accelerating"]);
+    hasText(raw, ["heavy throttle", "under load", "uphill", "accelerating", "acceleration"]);
 
   const roughOrShake =
     hasSignal(signals, "vibration") ||
     hasSignal(signals, "rough_idle") ||
-    hasText(raw, ["shaking", "misfire", "jerking", "rough"]);
+    hasText(raw, ["shaking", "misfire", "jerking", "rough", "stumble", "hesitation"]);
+
+  const flashingCel = hasText(raw, [
+    "flashing check engine",
+    "check engine light flashes",
+    "flashing cel",
+    "cel flashes",
+  ]);
+
+  if (hasBlackSmoke && hasFuelSmell) {
+    addPriority(priorities, {
+      key: "rich_raw_fuel_exhaust_priority",
+      rank: 1,
+      title: "Rich raw-fuel exhaust pattern",
+      mechanic_summary:
+        "Black smoke with raw fuel odor is a strong rich-combustion signature. The engine is either being overfueled or the delivered fuel is not being burned cleanly.",
+      why_primary:
+        "Black exhaust means excessive fuel or poor burn quality. Raw fuel smell confirms fuel is leaving the combustion event instead of being fully converted into power. This keeps the diagnostic path on injector leakage, fuel pressure regulation, fuel control error, ignition burn failure, or sensor feedback skew.",
+      verification_focus: [
+        "Check fuel trims and oxygen sensor behavior during idle and throttle snap.",
+        "Inspect spark plugs for wet fuel, carbon loading, or cylinder-specific fouling.",
+        "Check injector leakage, fuel pressure regulator behavior, and misfire counters before replacing sensors.",
+      ],
+      avoid:
+        "Do not lead with vacuum leak or cooling-system theories when black smoke and fuel odor are present unless coolant loss or overheating is confirmed.",
+    });
+  }
 
   if (hasSmoke && hasFuelSmell && loadSensitive) {
     addPriority(priorities, {
       key: "rich_overfueling_under_load",
-      rank: 1,
+      rank: 2,
       title: "Rich overfueling under heavy load",
       mechanic_summary:
-        "Black smoke and fuel odor under throttle keep this centered on excess fuel or fuel that is not being burned cleanly under load.",
+        "Throttle load makes the failure stronger, which means the fault shows up when cylinder pressure and fuel demand rise.",
       why_primary:
-        "Black smoke is rich combustion behavior. Fuel smell means raw fuel is leaving the combustion event. Heavy-throttle worsening shows the failure appears when cylinder pressure and fuel demand rise.",
+        "Heavy throttle increases cylinder pressure and fuel command. If smoke and fuel odor rise with load, the system is either adding too much fuel, losing ignition authority, or failing to burn the mixture cleanly under pressure.",
       verification_focus: [
         "Check misfire counters during load or snap-throttle testing.",
-        "Inspect spark plugs for fuel fouling or wet/rich deposits.",
-        "Verify fuel pressure behavior and injector leakage before replacing parts.",
+        "Verify fuel pressure behavior during acceleration.",
+        "Inspect plug gap, coil boots, and fuel-fouled plugs before replacing major components.",
       ],
       avoid:
-        "Do not lead with generic fuel delivery weakness or random sensor guesses before separating overfueling from ignition breakdown.",
+        "Do not call this simple fuel delivery weakness before separating overfueling from ignition breakdown.",
     });
   }
 
-  if (hasSmoke && hasFuelSmell && roughOrShake) {
+  if ((flashingCel || roughOrShake) && hasFuelSmell) {
     addPriority(priorities, {
-      key: "incomplete_combustion_raw_fuel",
-      rank: 2,
-      title: "Incomplete combustion leaving raw fuel",
+      key: "misfire_raw_fuel_catalyst_risk",
+      rank: 3,
+      title: "Misfire with raw-fuel catalyst risk",
       mechanic_summary:
-        "The engine is showing signs of fuel entering the cylinders but not being burned cleanly.",
+        "The combustion event is unstable enough that raw fuel may be entering the exhaust stream.",
       why_primary:
-        "Fuel odor plus shaking points toward combustion instability, where fuel is delivered but the burn event becomes weak or uneven.",
+        "A flashing check-engine light or strong shake with fuel smell is a classic catalyst-risk pattern. Fuel is being injected, but one or more cylinders may not be burning it completely.",
       verification_focus: [
-        "Check cylinder-specific misfire data if available.",
-        "Inspect plugs, coils, boots, and plug gap.",
-        "Look for fuel-fouled plugs that identify the affected cylinder bank or cylinder.",
+        "Read cylinder-specific misfire counters.",
+        "Inspect plugs, coils, boots, and injector behavior on the affected cylinder or bank.",
+        "Avoid extended driving under load until catalyst-damaging misfire is ruled out.",
       ],
       avoid:
-        "Do not call it a simple fuel smell without treating the misfire/catalyst risk seriously.",
+        "Do not treat this as a harmless check-engine light if the engine is shaking or fuel odor is present.",
     });
   }
 
   if (loadSensitive && roughOrShake) {
     addPriority(priorities, {
       key: "ignition_breakdown_under_cylinder_pressure",
-      rank: 3,
+      rank: 4,
       title: "Ignition breakdown under cylinder pressure",
       mechanic_summary:
-        "Heavy throttle raises cylinder pressure, and weak spark components often fail exactly under that stress.",
+        "Weak ignition often survives idle but fails under heavy cylinder pressure.",
       why_primary:
-        "A coil, plug, boot, or excessive plug gap can fire at idle but break down when load increases cylinder pressure.",
+        "Hard acceleration raises cylinder pressure. A weak coil, worn plug, damaged boot, carbon tracking, or excessive plug gap may fire at idle but fail when the mixture becomes harder to ignite.",
       verification_focus: [
         "Check misfire counters under load.",
-        "Swap suspect coils only after identifying a cylinder pattern.",
         "Inspect plug gap, plug condition, and coil boots for carbon tracking.",
+        "Swap coils only after identifying a cylinder pattern.",
       ],
       avoid:
         "Do not replace ignition parts blindly without confirming misfire behavior.",
@@ -112,19 +152,19 @@ function buildFuelCombustionPriority(context = {}) {
 
   if (
     includesAny(dominantSignals, ["bank-specific fuel trim"]) ||
-    hasText(raw, ["bank 1", "bank 2", "fuel trim", "o2 sensor", "restricted injector"])
+    hasText(raw, ["bank 1", "bank 2", "fuel trim", "o2 sensor", "restricted injector", "upstream o2"])
   ) {
     addPriority(priorities, {
       key: "bank_specific_air_fuel_control",
-      rank: 4,
+      rank: 5,
       title: "Bank-specific air/fuel control fault",
       mechanic_summary:
-        "Bank-specific data changes the path toward injector balance, oxygen sensor feedback, exhaust leak, or unmetered air on one side.",
+        "A bank-specific mixture fault needs side-to-side comparison, not random sensor replacement.",
       why_primary:
-        "A bank-specific trim pattern is not the same as a general rich or lean complaint; it needs side-to-side comparison.",
+        "One-bank trim or O2 behavior points toward injector balance, exhaust leak, oxygen sensor feedback skew, restricted injector, or unmetered air on one side.",
       verification_focus: [
         "Compare short-term and long-term fuel trims by bank.",
-        "Check oxygen sensor response and exhaust leaks before replacing sensors.",
+        "Check upstream O2 response and exhaust leaks before replacing sensors.",
         "Use injector balance or cylinder contribution testing if available.",
       ],
       avoid:
@@ -145,44 +185,63 @@ function buildCoolingPriority(context = {}) {
 
   const overheating =
     hasSignal(signals, "overheating") ||
-    hasText(raw, ["overheating", "running hot", "temp gauge", "steam", "coolant"]);
+    hasText(raw, [
+      "overheating",
+      "overheat",
+      "running hot",
+      "temp gauge",
+      "temperature gauge",
+      "steam",
+      "coolant loss",
+      "losing coolant",
+    ]);
+
+  const denied = hasText(raw, [
+    "no overheating",
+    "temperature normal",
+    "temperature stays normal",
+    "temp stays normal",
+    "no coolant loss",
+    "no steam",
+  ]);
 
   const thermal =
     hasSignal(signals, "heat_related") ||
-    behaviors.includes("thermal_failure_pattern");
+    behaviors.includes("thermal_failure_pattern") ||
+    hasText(raw, ["only when hot", "after warming up", "after driving", "heat soak"]);
 
-  if (overheating) {
+  if (overheating && !denied) {
     addPriority(priorities, {
       key: "cooling_system_overheat_risk",
       rank: 1,
-      title: "Cooling system overheating risk",
+      title: "Cooling system heat-rejection failure",
       mechanic_summary:
-        "Temperature rise must stay safety-priority because overheating can damage the engine quickly.",
+        "A real temperature rise stays safety-priority because overheating can damage the engine quickly.",
       why_primary:
-        "Overheating behavior points toward coolant loss, airflow failure, thermostat restriction, weak circulation, pressure loss, or internal coolant leakage.",
+        "Overheating behavior points toward coolant loss, airflow failure, thermostat restriction, weak circulation, pressure loss, radiator restriction, water-pump weakness, or combustion gas intrusion.",
       verification_focus: [
-        "Check coolant level and pressure-test the system cold.",
-        "Verify fan operation and temperature behavior at idle versus highway speed.",
-        "Confirm thermostat opening and coolant circulation before replacing parts.",
+        "Check coolant level cold and pressure-test the system.",
+        "Compare temperature behavior at idle, highway speed, and with A/C on.",
+        "Verify fan operation, thermostat opening, coolant circulation, and pressure-cap behavior.",
       ],
       avoid:
-        "Do not continue driving into the red temperature range.",
+        "Do not keep driving into the red temperature range or replace the thermostat blindly before confirming flow and pressure.",
     });
   }
 
   if (thermal && !overheating) {
     addPriority(priorities, {
       key: "heat_related_component_failure",
-      rank: 2,
-      title: "Heat-related component failure",
+      rank: 6,
+      title: "Heat-related component breakdown",
       mechanic_summary:
-        "The symptom changes after heat builds, which points to a component failing once temperature or resistance rises.",
+        "The symptom changing after heat builds points to a component failing once temperature or electrical resistance rises.",
       why_primary:
-        "Heat-related symptoms often expose ignition, sensor, relay, module, or pressure-related failures that may test normally when cold.",
+        "Heat-related symptoms often expose ignition coils, crank sensors, relays, modules, fuel pressure loss, or electrical components that test normally when cold.",
       verification_focus: [
         "Confirm whether the symptom improves after cooling down.",
         "Test the affected system hot, not only cold.",
-        "Look for heat-soak failure patterns in ignition, fuel pressure, sensors, or modules.",
+        "Look for heat-soak failure patterns in ignition, fuel pressure, sensors, and modules.",
       ],
       avoid:
         "Do not clear the fault just because it disappears after cooling.",
@@ -199,7 +258,18 @@ function buildBrakePriority(context = {}) {
 
   const braking =
     hasSignal(signals, "braking_issue") ||
-    hasText(raw, ["when braking", "while braking", "brake vibration", "pedal pulsation", "soft brake pedal"]);
+    hasText(raw, [
+      "when braking",
+      "while braking",
+      "brake vibration",
+      "pedal pulsation",
+      "soft brake pedal",
+      "hard brake pedal",
+      "brake pedal",
+      "grinding brakes",
+      "no brakes",
+      "pedal goes to floor",
+    ]);
 
   if (braking) {
     addPriority(priorities, {
@@ -209,10 +279,10 @@ function buildBrakePriority(context = {}) {
       mechanic_summary:
         "Brake-related symptoms must be separated before treating the issue as ordinary vibration.",
       why_primary:
-        "Vibration or pulsation under braking points toward rotor runout, pad transfer, hub runout, caliper drag, hydraulic concern, or ABS-related behavior.",
+        "Vibration, pulsation, grinding, or pedal change under braking points toward rotor runout, pad transfer, hub runout, caliper drag, hydraulic pressure loss, booster/vacuum failure, or ABS-related behavior.",
       verification_focus: [
         "Identify whether the shake is in the steering wheel, pedal, or whole vehicle.",
-        "Inspect rotor condition, pad transfer, caliper movement, and hub runout.",
+        "Inspect rotor condition, pad transfer, caliper movement, hub runout, and hydraulic leaks.",
         "Check pedal feel and stopping distance before further driving.",
       ],
       avoid:
@@ -230,27 +300,63 @@ function buildStartingElectricalPriority(context = {}) {
 
   const startup =
     hasSignal(signals, "startup_issue") ||
-    hasText(raw, ["won't start", "no start", "no crank", "starter clicks", "crank no start"]);
+    hasText(raw, [
+      "won't start",
+      "will not start",
+      "does not start",
+      "doesn't start",
+      "no start",
+      "no crank",
+      "starter clicks",
+      "only clicks",
+      "crank no start",
+      "cranks but won't start",
+    ]);
+
+  const noCrank = hasText(raw, [
+    "no crank",
+    "does not crank",
+    "doesn't crank",
+    "only clicks",
+    "starter clicks",
+    "nothing happens",
+    "no sound",
+  ]);
+
+  const crankNoStart = hasText(raw, [
+    "cranks but won't start",
+    "cranks but does not start",
+    "crank no start",
+    "turns over but won't start",
+  ]);
 
   const electrical =
-    hasText(raw, ["battery light", "alternator", "charging", "voltage", "clicking"]);
+    hasText(raw, ["battery light", "alternator", "charging", "voltage", "clicking", "low voltage"]);
 
   if (startup) {
     addPriority(priorities, {
-      key: "starting_sequence_first",
+      key: noCrank ? "no_crank_electrical_path" : crankNoStart ? "crank_no_start_path" : "starting_sequence_first",
       rank: 1,
-      title: "Starting-sequence classification",
+      title: noCrank
+        ? "No-crank electrical/starter path"
+        : crankNoStart
+        ? "Crank-no-start fuel/ignition/signal path"
+        : "Starting-sequence classification",
       mechanic_summary:
-        "The first diagnostic split is no-crank, crank-no-start, long-crank, or starts-then-dies.",
+        noCrank
+          ? "The engine is not being rotated, so the first path is battery, starter, relay, ground, ignition switch, or security authorization."
+          : crankNoStart
+          ? "The engine rotates but does not fire, so the path moves to fuel pressure, spark, injector pulse, compression, RPM signal, or immobilizer."
+          : "The first diagnostic split is no-crank, crank-no-start, long-crank, or starts-then-dies.",
       why_primary:
-        "Each starting behavior points to a different system: battery/starter, fuel, spark, compression, crank signal, immobilizer, or engine control.",
+        "Starting complaints cannot be diagnosed correctly until the exact starting behavior is separated. No-crank and crank-no-start are completely different diagnostic trees.",
       verification_focus: [
         "Confirm whether the engine cranks normally, clicks, or does nothing.",
         "Check battery voltage and voltage drop during crank.",
-        "If it cranks, verify spark, fuel pressure, injector pulse, and RPM signal.",
+        "If it cranks, verify spark, fuel pressure, injector pulse, compression, and RPM signal.",
       ],
       avoid:
-        "Do not jump to fuel or spark before confirming the exact starting behavior.",
+        "Do not jump to fuel pump, starter, or sensors before confirming the exact starting behavior.",
     });
   }
 
@@ -284,18 +390,58 @@ function buildTransmissionDrivetrainPriority(context = {}) {
 
   const priorities = [];
 
+  const hasVibration = hasSignal(signals, "vibration") || hasText(raw, [
+    "vibration",
+    "shake",
+    "shaking",
+    "wobble",
+  ]);
+
   const loadVibration =
-    hasSignal(signals, "vibration") &&
+    hasVibration &&
     (hasSignal(signals, "load_sensitive") ||
-      behaviors.includes("load_sensitive_failure"));
+      behaviors.includes("load_sensitive_failure") ||
+      hasText(raw, ["accelerating", "under load", "uphill"]));
+
+  const speedVibration =
+    hasVibration &&
+    hasText(raw, ["highway", "60 mph", "65 mph", "70 mph", "at speed", "high speed"]);
 
   const transmission =
-    hasText(raw, ["transmission", "slipping", "hard shift", "flare", "flared", "torque converter"]);
+    hasText(raw, [
+      "transmission",
+      "slipping",
+      "hard shift",
+      "flare",
+      "flared",
+      "torque converter",
+      "atf",
+      "line pressure",
+    ]);
 
-  if (transmission || loadVibration) {
+  if (transmission) {
+    addPriority(priorities, {
+      key: "transmission_pressure_or_apply_path",
+      rank: 2,
+      title: "Transmission pressure/apply control path",
+      mechanic_summary:
+        "Shift flare, slip, or harsh engagement points toward pressure control, clutch apply, valve body behavior, solenoid command, or internal sealing.",
+      why_primary:
+        "Transmission symptoms change with fluid temperature, load, commanded gear, and pressure. That makes pressure/apply behavior more important than guessing a whole transmission failure.",
+      verification_focus: [
+        "Check ATF level, condition, and temperature behavior.",
+        "Compare commanded gear, slip speed, and line-pressure data if available.",
+        "Separate cold-only, hot-only, and load-related shift symptoms.",
+      ],
+      avoid:
+        "Do not condemn the transmission before separating fluid, pressure command, solenoid control, and internal leakage.",
+    });
+  }
+
+  if (loadVibration) {
     addPriority(priorities, {
       key: "load_sensitive_drivetrain_path",
-      rank: 1,
+      rank: 3,
       title: "Load-sensitive drivetrain path",
       mechanic_summary:
         "A vibration that changes with throttle load should not be treated as simple tire balance first.",
@@ -308,6 +454,25 @@ function buildTransmissionDrivetrainPriority(context = {}) {
       ],
       avoid:
         "Do not lead with wheel balance unless the vibration follows road speed regardless of throttle.",
+    });
+  }
+
+  if (speedVibration && !loadVibration) {
+    addPriority(priorities, {
+      key: "speed_related_wheel_tire_driveline_path",
+      rank: 4,
+      title: "Speed-related wheel/tire/driveline vibration path",
+      mechanic_summary:
+        "A vibration that follows road speed points first toward rotating mass, runout, balance, tire structure, wheel bearing, or driveline angle.",
+      why_primary:
+        "Road-speed vibration usually enters through the steering wheel, seat, floor, or pedal depending on which rotating assembly is exciting the chassis.",
+      verification_focus: [
+        "Identify whether it is felt in the steering wheel, seat/floor, or brake pedal.",
+        "Inspect tire balance, tire separation, wheel runout, hub runout, and wheel bearings.",
+        "Check driveshaft/CV/axle behavior if it changes under load.",
+      ],
+      avoid:
+        "Do not call it engine vibration if it tracks vehicle speed instead of RPM.",
     });
   }
 
@@ -330,9 +495,9 @@ function buildNetworkSafetyPriority(context = {}) {
       mechanic_summary:
         "Network faults need power, ground, communication, and bus integrity verified before module replacement.",
       why_primary:
-        "U-codes and communication faults often come from voltage, grounds, wiring, termination resistance, or network signal quality.",
+        "U-codes and communication faults often come from voltage, grounds, wiring, termination resistance, module wake-up issues, or network signal quality.",
       verification_focus: [
-        "Check battery voltage and module power/grounds.",
+        "Check battery voltage and module power/grounds under load.",
         "Verify CAN resistance and communication at the DLC.",
         "Use scan-tool module presence and network scope data when available.",
       ],
@@ -363,6 +528,28 @@ function buildNetworkSafetyPriority(context = {}) {
     });
   }
 
+  if (
+    includesAny(dominantSignals, ["EPS", "steering"]) ||
+    hasText(raw, ["eps", "steering rack", "torque sensor", "zero-point reset", "steering angle"])
+  ) {
+    addPriority(priorities, {
+      key: "eps_steering_calibration_path",
+      rank: 2,
+      title: "EPS steering calibration path",
+      mechanic_summary:
+        "After steering or rack work, EPS calibration and torque-sensor zero point can create symptoms that look like a bad part.",
+      why_primary:
+        "Electric steering depends on learned center, torque input, steering angle, module power, and rack position. If those are not aligned, the system can feel notchy, pull, or fail to return correctly.",
+      verification_focus: [
+        "Check steering angle and torque sensor zero point with a capable scan tool.",
+        "Confirm EPS codes and module voltage before replacing the rack.",
+        "Verify alignment and tire pull after electronic calibration.",
+      ],
+      avoid:
+        "Do not condemn a steering rack until calibration, angle, torque zero, voltage, and alignment are verified.",
+    });
+  }
+
   return priorities;
 }
 
@@ -372,15 +559,18 @@ function buildSafetyTone(primary = {}, context = {}) {
   const riskFlags = context.risk_flags || [];
 
   const hasFuelRisk =
+    primary.key === "rich_raw_fuel_exhaust_priority" ||
     primary.key === "rich_overfueling_under_load" ||
     primary.key === "incomplete_combustion_raw_fuel" ||
-    includesAny(riskFlags, ["raw_fuel", "catalytic"]);
+    primary.key === "misfire_raw_fuel_catalyst_risk" ||
+    includesAny(riskFlags, ["raw_fuel", "catalytic"]) ||
+    hasText(raw, ["fuel smell", "raw fuel", "black smoke", "flashing check engine"]);
 
   if (primary.key === "brake_system_safety_priority") {
     return {
       level: "High",
       instruction:
-        "Limit driving and inspect the braking system immediately. Stop driving if pedal feel changes, stopping distance increases, grinding appears, or the vehicle pulls hard.",
+        "Brake symptoms are safety-sensitive. Limit driving and inspect the braking system immediately, especially if pedal feel changes, stopping distance increases, grinding appears, or the vehicle pulls hard.",
     };
   }
 
@@ -388,15 +578,15 @@ function buildSafetyTone(primary = {}, context = {}) {
     return {
       level: "High",
       instruction:
-        "Stop driving if the temperature reaches the red zone, steam appears, coolant drops quickly, or the engine begins to lose power.",
+        "Overheating can damage the engine quickly. Stop driving if the temperature reaches the red zone, steam appears, coolant drops quickly, or the engine begins to lose power.",
     };
   }
 
   if (hasFuelRisk) {
     return {
-      level: "Medium",
+      level: "High",
       instruction:
-        "Limit driving until inspected. Avoid heavy throttle because raw fuel can overheat and damage the catalytic converter.",
+        "Limit driving and avoid heavy throttle until inspected. Raw fuel and misfire behavior can overheat and damage the catalytic converter.",
     };
   }
 
@@ -419,7 +609,7 @@ function buildSafetyTone(primary = {}, context = {}) {
   return {
     level: "Medium",
     instruction:
-      "Vehicle may be moved carefully if it feels stable, but avoid stressing it until the cause is confirmed.",
+      "Move the vehicle carefully only if it feels stable, but avoid stressing it until the cause is confirmed.",
   };
 }
 
@@ -475,7 +665,6 @@ export function buildMechanicalPrioritization(context = {}) {
     ];
   }
 
-  // Always add cross-check priorities when text strongly supports them.
   priorities = [
     ...priorities,
     ...buildFuelCombustionPriority(context),
@@ -498,9 +687,9 @@ export function buildMechanicalPrioritization(context = {}) {
     rank: 1,
     title: "General behavior-based diagnostic path",
     mechanic_summary:
-      "The next step is to preserve the strongest symptom behavior and avoid random part guessing.",
+      "The strongest symptom behavior must be preserved before any part is guessed.",
     why_primary:
-      "There is not enough priority evidence yet to lock one system above the others.",
+      "There is not enough priority evidence yet to lock one system above the others, so the safest path is to separate load, idle, braking, speed, heat, and startup behavior.",
     verification_focus: [
       "Identify when the symptom happens.",
       "Separate load, idle, braking, speed, heat, and startup behavior.",
@@ -524,12 +713,12 @@ export function buildMechanicalPrioritization(context = {}) {
     safety,
 
     report_instruction:
-      "Write the final diagnosis using primary as the lead direction. Mention secondary only as supporting or alternate verification path. Do not write weak OR language unless two paths are truly tied.",
+      "Write the final diagnosis using primary as the lead direction. Mention secondary only as verification paths or lower-priority checks. Do not write weak OR language unless two paths are truly tied.",
 
     wording_guardrail:
-      "Prefer precise mechanic wording. Avoid 'fuel delivery or ignition breakdown' as the lead when a richer priority exists. Lead with the strongest behavior pattern.",
+      "Lead with the strongest behavior pattern. Use mechanic language that explains why the symptom happens physically. Avoid generic phrases such as 'could be many things', 'possibly', or 'consult a mechanic'.",
 
     verification_guardrail:
-      "Give practical confirmation steps before replacement. Do not claim confirmed failed parts without measurements.",
+      "Give practical confirmation steps before replacement. Do not claim a confirmed failed part without measurements, scan data, inspection, or repeatable symptom behavior.",
   };
 }
