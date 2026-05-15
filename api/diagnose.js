@@ -7,17 +7,25 @@ import {
 
 const DOCTOR_PROMPT = `
 Role:
-You are the DriveShift Lead Forensic Engineer.
+You are DriveShift Lead Diagnostic Engineer.
 
-You are a technical authority with 100 years of cumulative mechanical wisdom. You do not speculate; you deduce based on mechanical laws. Your tone is dry, professional, and absolute.
+You diagnose like a senior master mechanic explaining the fault path to another serious technician, but your wording must still be clear enough for a driver to understand.
 
-Core Logic:
-You analyze the "Failure Chain." You don't see a broken part; you see a breakdown in:
-- Kinetic Transfer
-- Fluid Dynamics
-- Chemical Energy Conversion
-- Electromagnetic Field Integrity
-- Structural Resonance
+You do not sound like a chatbot.
+You do not say "maybe", "possibly", "it could be many things", or "consult a mechanic" as a replacement for reasoning.
+You reason from symptoms, operating conditions, physics, and known failure behavior.
+
+Core Diagnostic Logic:
+You analyze the dominant failure chain first:
+- electrical load and voltage stability
+- combustion quality
+- fuel delivery and air metering
+- ignition under cylinder pressure
+- mechanical compression and timing
+- hydraulic pressure
+- heat-related failure behavior
+- rotational imbalance and resonance
+- brake, suspension, steering, and drivetrain load transfer
 
 Strict Output Format:
 
@@ -25,28 +33,28 @@ Diagnosis status:
 analysis
 
 Voice summary:
-A clinical, high-level summary of the mechanical state.
+One short, natural mechanic-level sentence.
 
 Risk level:
 Low / Medium / High / Critical
 
 Likely issue:
-The precise mechanical failure mechanism.
+State the strongest failure direction clearly.
 
 Why it fits:
-Mechanical Correlation: Connect the user's symptoms to the underlying physical failure with zero fluff.
+Explain the mechanical connection between the symptoms and the likely failure path. Make it sound like a real expert, not a generic list.
 
 What to inspect next:
-Professional-grade diagnostic steps.
+Give focused verification checks only.
 
 What to do next:
-The definitive corrective action path.
+Give the practical repair direction without overpromising certainty.
 
 Answer options:
 None
 
 Mechanic Notes:
-Professional mechanic observations, hidden failure patterns, verification advice, or critical diagnostic cautions that a skilled technician would mention before replacing parts.
+Add sharp mechanic observations, hidden failure patterns, verification cautions, or what not to replace too early.
 `;
 
 export default async function handler(req, res) {
@@ -95,10 +103,13 @@ export default async function handler(req, res) {
     });
 
     const diagnosticContext = buildDiagnosticContext(safeIssue, answerList);
+    const askedQuestions = extractAskedQuestions(answerList);
+    const dominantLock = buildLocalDominantLock(safeIssue, answerList);
 
     const readyForAnalysis =
       hasObdCode ||
       shouldForceFinal({ flowControl, hasObdCode }) ||
+      answerList.length >= 2 ||
       diagnosticContext?.readiness?.readyForAnalysis === true;
 
     if (!readyForAnalysis) {
@@ -108,12 +119,19 @@ export default async function handler(req, res) {
         answers: answerList,
         vehicleProfile,
         diagnosticContext,
+        dominantLock,
+        askedQuestions,
         obdCode,
         obdInsight,
       });
 
       const aiFollowUp = await requestOpenAIReport(followUpPrompt);
-      const cleanedFollowUp = cleanFollowUp(aiFollowUp);
+      const cleanedFollowUp = cleanFollowUp(aiFollowUp, {
+        lang,
+        issue: safeIssue,
+        askedQuestions,
+        dominantLock,
+      });
 
       return res.status(200).json({
         result:
@@ -121,6 +139,7 @@ export default async function handler(req, res) {
           buildNaturalFallbackFollowUp({
             lang,
             issue: safeIssue,
+            dominantLock,
           }),
       });
     }
@@ -131,6 +150,7 @@ export default async function handler(req, res) {
       answers: answerList,
       vehicleProfile,
       diagnosticContext,
+      dominantLock,
       obdCode,
       obdInsight,
     });
@@ -293,6 +313,8 @@ function buildAIFollowUpPrompt({
   answers,
   vehicleProfile,
   diagnosticContext,
+  dominantLock,
+  askedQuestions,
   obdCode,
   obdInsight,
 }) {
@@ -303,12 +325,10 @@ function buildAIFollowUpPrompt({
     : "No additional answers yet.";
 
   return `
-You are DriveShift, a premium mechanic-level diagnostic assistant.
+You are DriveShift, a premium mechanic-level diagnostic brain.
 
-Ask ONE natural, intelligent follow-up question.
-Do not give answer buttons.
-Do not mention AI.
-Do not produce a final diagnosis yet.
+Your job now is NOT to diagnose yet.
+Your job is to ask ONE sharp follow-up question that separates the most likely failure path.
 
 Language:
 ${lang === "es" ? "Spanish only" : "English only"}
@@ -322,6 +342,12 @@ ${issue}
 User previous answers:
 ${userAnswers}
 
+Already asked questions:
+${askedQuestions.length ? askedQuestions.join("\n") : "None"}
+
+Dominant symptom lock:
+${dominantLock || "None"}
+
 OBD code:
 ${obdCode || "None"}
 
@@ -330,6 +356,20 @@ ${obdInsight || "None"}
 
 Internal diagnostic context:
 ${JSON.stringify(diagnosticContext, null, 2)}
+
+Rules:
+- Ask exactly ONE question.
+- Do not repeat or reword any already asked question.
+- Do not ask generic questions like "when does it happen?" unless no better question exists.
+- The question must target the dominant symptom.
+- If the symptom is smoke/fuel smell, ask about exhaust color, fuel smell, misfire, or fuel economy.
+- If the symptom is no-start, separate crank/no-crank/click/security/fuel/ignition.
+- If the symptom is vibration, separate braking, speed, acceleration, idle, and steering-wheel feedback.
+- If the symptom is overheating, separate coolant loss, fan operation, thermostat behavior, and heater output.
+- If the symptom is burning smell, separate oil, coolant, clutch/brake, electrical, or belt smell.
+- Do not give answer buttons.
+- Do not mention AI.
+- Do not produce a final diagnosis.
 
 Return exactly this format:
 
@@ -346,7 +386,7 @@ Likely issue:
 Pending diagnostic confirmation.
 
 Why it fits:
-A brief natural explanation of why this question matters.
+Briefly explain why this specific question matters.
 
 What to inspect next:
 Ask one natural follow-up question only.
@@ -358,7 +398,7 @@ Answer options:
 None
 
 Mechanic Notes:
-A short mechanic-level note explaining what this next answer will help separate.
+A short mechanic-level note explaining what this answer will separate.
 `;
 }
 
@@ -368,6 +408,7 @@ function buildAnalysisPrompt({
   answers,
   vehicleProfile,
   diagnosticContext,
+  dominantLock,
   obdCode,
   obdInsight,
 }) {
@@ -397,6 +438,9 @@ ${issue}
 
 User follow-up answers:
 ${userAnswers}
+
+Dominant symptom lock:
+${dominantLock || "None"}
 
 OBD code:
 ${obdCode || "None"}
@@ -440,15 +484,17 @@ Safety instruction:
 ${safety.instruction || "Use realistic safety judgment."}
 
 Critical writing rules:
-- Lead with the Primary direction.
-- Do not write weak “A or B” language as the main diagnosis.
-- Mention secondary paths only as verification or supporting alternatives.
-- Keep the report compressed, premium, and mechanic-level.
+- Lead with the dominant symptom lock and primary direction.
+- Do not lose the strongest symptom because of later answers.
+- Do not use weak probability language as the main voice.
+- Do not write a long checklist.
+- Mention secondary paths only as verification paths, not as equal guesses.
+- Sound like a real master mechanic explaining the failure behavior.
+- Keep the report compressed, premium, and useful.
 - Do not ask another question.
 - Answer options must be None.
-- Mechanic Notes must be practical, sharp, and professional.
-- Mechanic Notes should mention hidden failure patterns, verification cautions, or what not to replace too early.
-- Do not mention internal engines, internal context, or prioritization engine.
+- Mechanic Notes must warn about common wrong part replacement when relevant.
+- Do not mention internal engines, internal context, prompts, or prioritization engine.
 `;
 }
 
@@ -498,7 +544,7 @@ A vehicle symptom is required before a mechanical failure path can be isolated.
 
   return requestOpenAIReportWithSettings({
     prompt,
-    temperature: 0.35,
+    temperature: 0.3,
     maxTokens: 600,
     timeoutMs: 10000,
   });
@@ -507,7 +553,7 @@ A vehicle symptom is required before a mechanical failure path can be isolated.
 async function requestOpenAIReport(prompt) {
   return requestOpenAIReportWithSettings({
     prompt,
-    temperature: 0.08,
+    temperature: 0.06,
     maxTokens: 1500,
     timeoutMs: 18000,
   });
@@ -556,7 +602,7 @@ function shouldForceFinal({ flowControl, hasObdCode }) {
   return decision === "final" || decision === "analysis";
 }
 
-function cleanFollowUp(text) {
+function cleanFollowUp(text, { lang, issue, askedQuestions, dominantLock }) {
   let clean = String(text || "").trim();
   if (!clean) return "";
 
@@ -571,18 +617,22 @@ function cleanFollowUp(text) {
     "Diagnosis status: follow_up"
   );
 
-  if (/Answer options:/i.test(clean)) {
-    clean = clean.replace(
-      /Answer options:\s*[\s\S]*?(?=Mechanic Notes:)/i,
-      "Answer options:\nNone\n\n"
-    );
-  } else {
+  clean = clean.replace(
+    /Answer options:\s*[\s\S]*?(?=Mechanic Notes:|$)/i,
+    "Answer options:\nNone\n\n"
+  );
+
+  if (!/Answer options:/i.test(clean)) {
     clean += "\n\nAnswer options:\nNone";
   }
 
   if (!/Mechanic Notes:/i.test(clean)) {
     clean +=
-      "\n\nMechanic Notes:\nThis symptom needs one more operating detail before the failure path can be separated cleanly.";
+      "\n\nMechanic Notes:\nThis answer separates the dominant failure path before parts are replaced.";
+  }
+
+  if (questionLooksRepeated(clean, askedQuestions)) {
+    return buildNaturalFallbackFollowUp({ lang, issue, dominantLock });
   }
 
   return clean.trim();
@@ -603,12 +653,12 @@ function cleanAnalysis(text) {
     clean = `Diagnosis status: analysis\n\n${clean}`;
   }
 
-  if (/Answer options:/i.test(clean)) {
-    clean = clean.replace(
-      /Answer options:\s*[\s\S]*?(?=Mechanic Notes:)/i,
-      "Answer options:\nNone\n\n"
-    );
-  } else {
+  clean = clean.replace(
+    /Answer options:\s*[\s\S]*?(?=Mechanic Notes:|$)/i,
+    "Answer options:\nNone\n\n"
+  );
+
+  if (!/Answer options:/i.test(clean)) {
     clean += "\n\nAnswer options:\nNone";
   }
 
@@ -629,20 +679,22 @@ function looksBad(text) {
     clean.includes("could be many things") ||
     clean.includes("hard to say") ||
     clean.includes("as an ai") ||
-    clean.includes("i am not a mechanic")
+    clean.includes("i am not a mechanic") ||
+    clean.includes("i'm not a mechanic")
   );
 }
 
-function buildNaturalFallbackFollowUp({ lang, issue }) {
+function buildNaturalFallbackFollowUp({ lang, issue, dominantLock }) {
   const isEs = lang === "es";
+  const q = buildSmartFallbackQuestion({ lang, issue, dominantLock });
 
   return `Diagnosis status: follow_up
 
 Voice summary:
 ${
   isEs
-    ? "Necesito un detalle más para separar la causa real."
-    : "I need one more detail to separate the real failure path."
+    ? "Necesito un dato más para separar la falla principal."
+    : "I need one more detail to separate the main failure path."
 }
 
 Risk level:
@@ -654,23 +706,15 @@ Pending diagnostic confirmation.
 Why it fits:
 ${
   isEs
-    ? "El síntoma todavía necesita una condición de operación más para ubicar el sistema correcto."
-    : "The symptom still needs one operating condition before the correct system can be isolated."
+    ? "Ese detalle define si el problema viene de carga, combustión, combustible, frenos, dirección o tren motriz."
+    : "That detail separates whether the fault is coming from load, combustion, fuel delivery, braking, steering, or drivetrain behavior."
 }
 
 What to inspect next:
-${
-  isEs
-    ? "Dime cuándo aparece con más claridad y qué cambia cuando aceleras, frenas o mantienes velocidad constante."
-    : "Tell me when it shows up most clearly and what changes when you accelerate, brake, or hold steady speed."
-}
+${q}
 
 What to do next:
-${
-  isEs
-    ? "Dime cuándo aparece con más claridad y qué cambia cuando aceleras, frenas o mantienes velocidad constante."
-    : "Tell me when it shows up most clearly and what changes when you accelerate, brake, or hold steady speed."
-}
+${q}
 
 Answer options:
 None
@@ -678,9 +722,48 @@ None
 Mechanic Notes:
 ${
   isEs
-    ? "Ese detalle separa una falla de carga, una falla de combustión, una falla de freno o una vibración de tren motriz antes de cambiar piezas."
-    : "That detail separates a load-related fault, combustion fault, brake fault, or drivetrain vibration before parts are replaced."
+    ? "La respuesta evita cambiar piezas por intuición y dirige la prueba hacia el sistema correcto."
+    : "The answer prevents guessing at parts and points the test toward the correct system."
 }`;
+}
+
+function buildSmartFallbackQuestion({ lang, issue, dominantLock }) {
+  const isEs = lang === "es";
+  const text = `${issue || ""} ${dominantLock || ""}`.toLowerCase();
+
+  if (/smoke|humo|fuel smell|gas smell|gasolina/.test(text)) {
+    return isEs
+      ? "¿El humo es negro, blanco o azul, y huele a gasolina cruda?"
+      : "Is the smoke black, white, or blue, and does it smell like raw fuel?";
+  }
+
+  if (/no start|won't start|crank|click|arranca|enciende/.test(text)) {
+    return isEs
+      ? "Cuando intentas arrancar, ¿el motor gira normal, solo hace clic, o no hace nada?"
+      : "When you try to start it, does the engine crank normally, only click, or do nothing at all?";
+  }
+
+  if (/vibration|shake|shaking|vibra|vibración|vibracion/.test(text)) {
+    return isEs
+      ? "¿La vibración aparece al frenar, al acelerar, a cierta velocidad, o también en ralentí?"
+      : "Does the vibration show up while braking, accelerating, at a certain speed, or even at idle?";
+  }
+
+  if (/overheat|overheating|coolant|sobrecalienta|coolant/.test(text)) {
+    return isEs
+      ? "¿La temperatura sube parado, manejando en carretera, o después de perder coolant?"
+      : "Does the temperature rise while sitting still, highway driving, or after losing coolant?";
+  }
+
+  if (/burning|smell|olor|quemado/.test(text)) {
+    return isEs
+      ? "¿El olor parece aceite quemado, plástico/eléctrico, coolant dulce, o freno/clutch caliente?"
+      : "Does the smell seem like burnt oil, electrical plastic, sweet coolant, or hot brake/clutch material?";
+  }
+
+  return isEs
+    ? "¿Cuándo aparece más fuerte: al acelerar, frenar, girar, estar parado, o mantener velocidad constante?"
+    : "When is it strongest: accelerating, braking, turning, sitting still, or holding steady speed?";
 }
 
 function buildGreetingResponse(lang) {
@@ -691,8 +774,8 @@ function buildGreetingResponse(lang) {
 Voice summary:
 ${
   isEs
-    ? "Hola. Estoy listo cuando quieras; dime qué está haciendo el vehículo."
-    : "Hey. I’m ready whenever you are; tell me what the vehicle is doing."
+    ? "Hola. Estoy listo; dime qué está haciendo el vehículo."
+    : "Hey. I’m ready; tell me what the vehicle is doing."
 }
 
 Risk level:
@@ -704,8 +787,8 @@ Pending vehicle symptom.
 Why it fits:
 ${
   isEs
-    ? "El usuario saludó sin describir todavía un problema del vehículo."
-    : "The user greeted DriveShift without describing a vehicle problem yet."
+    ? "Todavía no hay un síntoma mecánico para aislar."
+    : "There is no mechanical symptom to isolate yet."
 }
 
 What to inspect next:
@@ -720,8 +803,8 @@ None
 Mechanic Notes:
 ${
   isEs
-    ? "Sin un síntoma del vehículo, todavía no hay una ruta mecánica que aislar."
-    : "Without a vehicle symptom, there is no mechanical path to isolate yet."
+    ? "Sin un síntoma del vehículo, todavía no hay una ruta mecánica que separar."
+    : "Without a vehicle symptom, there is no mechanical path to separate yet."
 }`;
 }
 
@@ -762,8 +845,8 @@ None
 Mechanic Notes:
 ${
   isEs
-    ? "El primer síntoma define si el diagnóstico debe ir hacia motor, transmisión, frenos, electricidad o suspensión."
-    : "The first symptom determines whether the diagnostic path should go toward engine, transmission, brakes, electrical, or suspension."
+    ? "El primer síntoma define si el diagnóstico va hacia motor, transmisión, frenos, electricidad o suspensión."
+    : "The first symptom determines whether the diagnostic path goes toward engine, transmission, brakes, electrical, or suspension."
 }`;
 }
 
@@ -915,6 +998,82 @@ function buildVehicleText(profile) {
   if (profile.mileage) parts.push(`Mileage: ${profile.mileage}`);
 
   return parts.length ? parts.join(", ") : "Unknown vehicle.";
+}
+
+function extractAskedQuestions(answers) {
+  return (Array.isArray(answers) ? answers : [])
+    .map((a) => String(a?.question || "").trim())
+    .filter(Boolean);
+}
+
+function questionLooksRepeated(text, askedQuestions) {
+  if (!askedQuestions.length) return false;
+
+  const clean = normalizeQuestionText(text);
+  return askedQuestions.some((q) => {
+    const oldQ = normalizeQuestionText(q);
+    return oldQ && clean.includes(oldQ.slice(0, 45));
+  });
+}
+
+function normalizeQuestionText(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/diagnosis status:[\s\S]*?what to inspect next:/i, "")
+    .replace(/what to do next:[\s\S]*/i, "")
+    .replace(/[^\w\s]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildLocalDominantLock(issue, answers) {
+  const text = `${issue || ""} ${(answers || [])
+    .map((a) => `${a.question || ""} ${a.answer || ""}`)
+    .join(" ")}`.toLowerCase();
+
+  const locks = [];
+
+  if (/black smoke|humo negro|raw fuel|fuel smell|gas smell|gasolina/.test(text)) {
+    locks.push("Fuel-rich combustion / overfueling / injector or fuel control fault");
+  }
+
+  if (/white smoke|humo blanco|coolant|sweet smell|coolant loss/.test(text)) {
+    locks.push("Coolant intrusion or overheating-related failure path");
+  }
+
+  if (/blue smoke|humo azul|burning oil|oil consumption/.test(text)) {
+    locks.push("Oil consumption through rings, valve seals, turbo, or PCV path");
+  }
+
+  if (/overheat|overheating|hot|temperature|sobrecalienta/.test(text)) {
+    locks.push("Cooling system heat rejection failure");
+  }
+
+  if (/burning smell|smell burning|electrical smell|plastic smell|olor a quemado/.test(text)) {
+    locks.push("Heat, friction, oil leak, belt slip, brake drag, or electrical overheating path");
+  }
+
+  if (/no start|won't start|does not start|crank|click|arranca|enciende/.test(text)) {
+    locks.push("No-start path: battery, starter, crank signal, fuel, ignition, or security authorization");
+  }
+
+  if (/vibration|shake|shaking|vibra|vibración|vibracion/.test(text)) {
+    locks.push("Rotational imbalance, engine misfire, brake pulsation, driveline, tire, or mount-related vibration");
+  }
+
+  if (/brake|brakes|abs|freno|frenos/.test(text)) {
+    locks.push("Brake hydraulic, friction, ABS, rotor, caliper, or wheel-speed signal path");
+  }
+
+  if (/steering|wheel pulls|eps|dirección|direccion/.test(text)) {
+    locks.push("Steering assist, alignment, suspension geometry, tire pull, or torque sensor path");
+  }
+
+  if (/misfire|rough idle|idle|stumble|stall|stalls/.test(text)) {
+    locks.push("Combustion instability: ignition, injector, air leak, compression, timing, or fuel trim path");
+  }
+
+  return locks.length ? [...new Set(locks)].join(" | ") : "";
 }
 
 function extractText(data) {
