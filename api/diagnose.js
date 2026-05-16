@@ -29,25 +29,25 @@ You must strictly populate every single section header below. Never combine head
 Diagnosis status:
 analysis
 
-Final Mechanical Report:
+**Final Mechanical Report:**
 [Exactly 2 cold, dense engineering sentences explaining the micro-hydraulic/thermodynamic failure mechanism under load/thermal stress.]
 
-Likely issue:
+**Likely issue:**
 [Exactly 3 to 5 words naming the broken component or sub-circuit.]
 
-Why it fits:
+**Why it fits:**
 [Exactly 1 rigorous sentence isolating the specific temperature/load anomaly that correlates perfectly with this failure.]
 
-What to verify:
+**What to verify:**
 [Exactly 1 concise line dictating specific professional PID live-data parameters or pressure deltas to log.]
 
-Next professional action:
+**Next professional action:**
 [Exactly 1 advanced engineering execution step or calibration test.]
 
-Risk level:
+**Risk level:**
 [Low / Medium / High / Critical]
 
-Mechanic Notes:
+**Mechanic Notes:**
 [Exactly 1 short elite workshop observation regarding long-term degradation.]
 
 Answer options:
@@ -94,7 +94,7 @@ const obdCode = extractObdCode(safeIssue);
 const hasObdCode = Boolean(obdCode);
 
 const liveDataContext = parseLiveDataContext(safeIssue);
-// إصلاح اسم الدالة المستدعاة هنا ليتطابق مع الـ Import الأصلي لمنع الانهيار
+
 const obdInsight = buildObdInsight({
 code: obdCode || "",
 liveData: liveDataContext,
@@ -173,12 +173,15 @@ result: buildSafeAnalysisFallback(lang),
 
 return res.status(200).json({ result });
 } catch (error) {
-// إرجاع الفولباك الآمن في حالة حدوث أي خطأ غير متوقع
 return res.status(200).json({
 result: buildErrorFallback(),
 });
 }
 }
+
+// ==========================================
+// HELPER FUNCTIONS (المكان الصحيح للدوال بالأسفل)
+// ==========================================
 
 function detectSimpleIntent(text) {
 const raw = String(text || "").trim();
@@ -430,17 +433,15 @@ timeoutMs: 10000,
 });
 }
 
-// دالة وسيطة لإرسال الإعدادات الدقيقة
 async function requestOpenAIReport(prompt, isFollowUp = false) {
 return requestOpenAIReportWithSettings({
 prompt,
-temperature: isFollowUp ? 0.1 : 0.0, // الصفر المطلق لمنع تشويه الهيدرز أثناء التحليل
+temperature: isFollowUp ? 0.1 : 0.0,
 maxTokens: isFollowUp ? 800 : 500,
 timeoutMs: 18000,
 });
 }
 
-// تم إرجاع الـ API والـ URL للوضع القديم الأصلي لملفك لضمان عدم حدوث الانهيار
 async function requestOpenAIReportWithSettings({
 prompt,
 temperature,
@@ -460,7 +461,7 @@ Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
 },
 body: JSON.stringify({
 model: process.env.DRIVESHIFT_MODEL || "gpt-4o-mini",
-input: prompt, // إرجاع الهيكل المتوافق مع سيرفرك الوسيط المخصص
+input: prompt,
 temperature,
 max_output_tokens: maxTokens,
 }),
@@ -517,16 +518,35 @@ return buildNaturalFallbackFollowUp({ lang, issue, dominantLock });
 return clean.trim();
 }
 
+// ==========================================
+// الدوال الجديدة المحدثة بالـ Markdown Bold
+// ==========================================
+
 function cleanAnalysis(text) {
 let clean = String(text || "").trim();
 if (!clean) return "";
 
-clean = clean.replace(/When to stop driving:/gi, "Mechanic Notes:");
+clean = clean.replace(/When to stop driving:/gi, "**Mechanic Notes:**");
+clean = clean.replace(/Mechanic Notes:/gi, "**Mechanic Notes:**");
 clean = clean.replace(/Diagnosis status:\s*follow_up/i, "Diagnosis status: analysis");
 
 if (!/Diagnosis status:/i.test(clean)) {
 clean = `Diagnosis status:\nanalysis\n\n${clean}`;
 }
+
+const headersToFix = [
+"Final Mechanical Report",
+"Likely issue",
+"Why it fits",
+"What to verify",
+"Next professional action",
+"Risk level"
+];
+
+headersToFix.forEach(header => {
+const regex = new RegExp(`\\*\\*?${header}\\*\\*?:?`, "gi");
+clean = clean.replace(regex, `**${header}:**`);
+});
 
 clean = clean.replace(/Answer options:\s*[\s\S]*$/i, "Answer options:\nNone");
 
@@ -536,6 +556,98 @@ clean += "\n\nAnswer options:\nNone";
 
 return clean.trim();
 }
+
+function buildSafeAnalysisFallback(lang) {
+const isEs = lang === "es";
+if (isEs) {
+return `Diagnosis status:
+analysis
+
+**Final Mechanical Report:**
+DriveShift no pudo completar un informe confiable desde el servidor.
+
+**Likely issue:**
+Error de respuesta diagnóstica del servidor.
+
+**Why it fits:**
+El servidor no devolvió un reporte mecánico utilizable.
+
+**What to verify:**
+Revisa los logs del backend.
+
+**Next professional action:**
+Corrige la respuesta del servidor y prueba otra vez.
+
+**Risk level:**
+Medium
+
+**Mechanic Notes:**
+Este es un fallo técnico, no una conclusión mecánica.
+
+Answer options:
+None`;
+}
+
+return `Diagnosis status:
+analysis
+
+**Final Mechanical Report:**
+DriveShift could not complete a reliable final report from the server response.
+
+**Likely issue:**
+Server diagnostic response failed.
+
+**Why it fits:**
+The diagnostic brain did not return a usable mechanic report.
+
+**What to verify:**
+Check the backend logs and OpenAI response.
+
+**Next professional action:**
+Fix the backend response and test again.
+
+**Risk level:**
+Medium
+
+**Mechanic Notes:**
+This is a technical failure, not a mechanical conclusion.
+
+Answer options:
+None`;
+}
+
+function buildErrorFallback() {
+return `Diagnosis status:
+analysis
+
+**Final Mechanical Report:**
+DriveShift could not reach the diagnostic brain.
+
+**Likely issue:**
+Backend diagnostic error.
+
+**Why it fits:**
+The server could not complete the diagnostic request.
+
+**What to verify:**
+Check the route, environment variables, and OpenAI response.
+
+**Next professional action:**
+Fix the backend error and test again.
+
+**Risk level:**
+Medium
+
+**Mechanic Notes:**
+This failure is technical, not mechanical.
+
+Answer options:
+None`;
+}
+
+// ==========================================
+// بقية دوال المساعدة القديمة المستقرة
+// ==========================================
 
 function looksBad(text) {
 const clean = String(text || "").toLowerCase();
@@ -604,181 +716,6 @@ return isEs ? "¿El olor parece aceite quemado, plástico/eléctrico, coolant du
 return isEs
 ? "¿Cuándo aparece más fuerte: al acelerar, frenار, girar, estar parado, o mantener velocidad constante?"
 : "When is it strongest: accelerating, braking, turning, sitting still, or holding steady speed?";
-}
-
-function buildGreetingResponse(lang) {
-const isEs = lang === "es";
-return `Diagnosis status: follow_up
-
-Voice summary:
-${isEs ? "Hola. Estoy listo; dime qué está haciendo el vehículo." : "Hey. I’m ready; tell me what the vehicle is doing."}
-
-Risk level:
-Low
-
-Likely issue:
-Pending vehicle symptom.
-
-Why it fits:
-${isEs ? "Todavía no hay un síntoma mecánico para aislar." : "There is no mechanical symptom to isolate yet."}
-
-What to inspect next:
-${isEs ? "Dime qué está haciendo el vehículo." : "Tell me what the vehicle is doing."}
-
-What to do next:
-${isEs ? "Dime qué está haciendo el vehículo." : "Tell me what the vehicle is doing."}
-
-Answer options:
-None
-
-Mechanic Notes:
-${isEs ? "Sin un síntoma del vehículo, todavía no hay una ruta mecánica que separar." : "Without a vehicle symptom, there is no mechanical path to separate yet."}`;
-}
-
-function buildGeneralHelpResponse(lang) {
-const isEs = lang === "es";
-return `Diagnosis status: follow_up
-
-Voice summary:
-${isEs ? "Claro. Dime qué está haciendo el vehículo y empezamos." : "Of course. Tell me what the vehicle is doing and we’ll start."}
-
-Risk level:
-Low
-
-Likely issue:
-Pending vehicle symptom.
-
-Why it fits:
-${isEs ? "El mensaje pide ayuda, pero todavía no incluye un síntoma mecánico específico." : "The message asks for help but does not include a specific mechanical symptom yet."}
-
-What to inspect next:
-${isEs ? "Describe el síntoma principal." : "Describe the main symptom."}
-
-What to do next:
-${isEs ? "Describe el síntoma principal." : "Describe the main symptom."}
-
-Answer options:
-None
-
-Mechanic Notes:
-${isEs ? "El primer síntoma determina el camino de diagnóstico." : "The first symptom determines the diagnostic path."}`;
-}
-
-function buildEmptyFollowUp(lang) {
-const isEs = lang === "es";
-return `Diagnosis status: follow_up
-
-Voice summary:
-${isEs ? "Estoy listo. Dime qué está haciendo el vehículo." : "I’m ready. Tell me what the vehicle is doing."}
-
-Risk level:
-Low
-
-Likely issue:
-Pending vehicle symptom.
-
-Why it fits:
-${isEs ? "No hay suficiente información para iniciar el diagnóstico." : "There is not enough information to start the diagnostic path."}
-
-What to inspect next:
-${isEs ? "Describe qué está haciendo el vehículo." : "Describe what the vehicle is doing."}
-
-What to do next:
-${isEs ? "Describe what the vehicle is doing." : "Describe what the vehicle is doing."}
-
-Answer options:
-None
-
-Mechanic Notes:
-${isEs ? "Un diagnóstico útil empieza con el síntoma principal." : "A useful diagnosis starts with the main symptom."}`;
-}
-
-function buildSafeAnalysisFallback(lang) {
-const isEs = lang === "es";
-if (isEs) {
-return `Diagnosis status:
-analysis
-
-Final Mechanical Report:
-DriveShift no pudo completar un informe confiable desde el servidor.
-
-Likely issue:
-Error de respuesta diagnóstica del servidor.
-
-Why it fits:
-El servidor no devolvió un reporte mecánico utilizable.
-
-What to verify:
-Revisa los logs del backend.
-
-Next professional action:
-Corrige la respuesta del servidor y prueba otra vez.
-
-Risk level:
-Medium
-
-Mechanic Notes:
-Este es un fallo técnico, no una conclusión mecánica.
-
-Answer options:
-None`;
-}
-
-return `Diagnosis status:
-analysis
-
-Final Mechanical Report:
-DriveShift could not complete a reliable final report from the server response.
-
-Likely issue:
-Server diagnostic response failed.
-
-Why it fits:
-The diagnostic brain did not return a usable mechanic report.
-
-What to verify:
-Check the backend logs and OpenAI response.
-
-Next professional action:
-Fix the backend response and test again.
-
-Risk level:
-Medium
-
-Mechanic Notes:
-This is a technical failure, not a mechanical conclusion.
-
-Answer options:
-None`;
-}
-
-function buildErrorFallback() {
-return `Diagnosis status:
-analysis
-
-Final Mechanical Report:
-DriveShift could not reach the diagnostic brain.
-
-Likely issue:
-Backend diagnostic error.
-
-Why it fits:
-The server could not complete the diagnostic request.
-
-What to verify:
-Check the route, environment variables, and OpenAI response.
-
-Next professional action:
-Fix the backend error and test again.
-
-Risk level:
-Medium
-
-Mechanic Notes:
-This failure is technical, not mechanical.
-
-Answer options:
-None`;
 }
 
 function extractObdCode(text) {
