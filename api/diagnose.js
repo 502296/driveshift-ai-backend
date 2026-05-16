@@ -161,12 +161,14 @@ export default async function handler(req, res) {
     const askedQuestions = extractAskedQuestions(answerList);
     const dominantLock = buildLocalDominantLock(safeIssue, answerList);
 
-    const readyForAnalysis =
-      hasObdCode ||
-      shouldForceFinal({ flowControl, hasObdCode }) ||
-      answerList.length >= 2 ||
-      diagnosticContext?.readiness?.readyForAnalysis === true;
+   const clientAnswerCount = Number(flowControl?.answerCount || answerList.length || 0);
 
+const readyForAnalysis =
+  hasObdCode ||
+  shouldForceFinal({ flowControl, hasObdCode, answerCount: clientAnswerCount }) ||
+  clientAnswerCount >= 2 ||
+  answerList.length >= 2;
+    
     if (!readyForAnalysis) {
       const followUpPrompt = buildAIFollowUpPrompt({
         lang,
