@@ -124,7 +124,6 @@ None
 Mechanic Notes:
 [End with an elite-level workshop observation, hidden interaction pattern, thermal behavior insight, or real-world drivability clue that only a top-tier diagnostic expert would immediately recognize.]
 `;
-`
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ result: "Method not allowed" });
