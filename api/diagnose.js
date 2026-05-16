@@ -663,12 +663,17 @@ async function requestOpenAIReportWithSettings({
     return "";
   }
 }
-
-function shouldForceFinal({ flowControl, hasObdCode }) {
+function shouldForceFinal({ flowControl, hasObdCode, answerCount = 0 }) {
   if (hasObdCode) return true;
+  if (answerCount >= 2) return true;
 
-  const decision = String(flowControl?.localDecision || "").toLowerCase();
-  return decision === "final" || decision === "analysis";
+  const decision = String(flowControl?.localDecision || "").toLowerCase().trim();
+
+  return (
+    decision === "final" ||
+    decision === "analysis" ||
+    decision === "final_report"
+  );
 }
 
 function cleanFollowUp(text, { lang, issue, askedQuestions, dominantLock }) {
