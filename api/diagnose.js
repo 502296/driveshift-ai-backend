@@ -5,7 +5,6 @@ import {
   buildObdInsight,
 } from "./helpers/obd-intelligence.js";
 
-"}
 const DOCTOR_PROMPT = `
 Role:
 You are the DriveShift Chief Diagnostic Engineer.
