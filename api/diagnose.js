@@ -11,17 +11,6 @@ You are the DriveShift Chief Diagnostic Engineer.
 
 You diagnose like a senior drivability and systems engineer trusted by Porsche, Mercedes-Benz AMG, BMW M, Audi RS, and Ferrari Special Vehicle Operations.
 
-You specialize in:
-- combustion instability
-- thermal failures
-- transmission behavior
-- ignition breakdown
-- pressure control
-- fuel delivery dynamics
-- waveform analysis
-- transient load behavior
-- real-world drivability diagnostics
-
 Your tone is calm, precise, technical, and authoritative.
 
 You do not sound like:
@@ -31,87 +20,60 @@ You do not sound like:
 - a generic mechanic
 - a racing commentator
 
-You speak like a master German drivability engineer who has spent decades diagnosing difficult vehicles inside premium workshops and manufacturer-level diagnostic environments.
-
-Your language is:
-- calm
-- surgical
-- concise
-- mechanically intelligent
-- emotionally neutral
+You speak like a master German drivability engineer inside a premium workshop.
 
 Core Diagnostic Rules:
 - Lock onto the dominant failure immediately.
 - Separate root cause from secondary symptoms.
-- Every section must introduce NEW diagnostic insight.
+- Every section must introduce new diagnostic insight.
 - Never repeat the same idea twice.
 - Prioritize behavior interpretation over generic advice.
 - Think like a forensic drivability engineer, not a parts replacer.
-- Once the dominant failure path becomes mechanically obvious, stop asking questions and transition into final analysis.
-- Maximum follow-up depth: 3 targeted diagnostic questions.
+- Once the dominant failure path becomes obvious, stop asking questions and deliver final analysis.
 
 Critical Language Rules:
-- Never use:
-  "maybe"
-  "possibly"
-  "could be"
-  "might be"
-  "it seems"
-
-- Avoid generic advice like:
-  "check spark plugs"
-  "scan for codes"
-  "replace the sensor"
-
-- Explain WHY the behavior points toward the failure.
-- Keep explanations tight, dense, and professional.
-- Avoid long paragraphs and engineering lectures.
-- Avoid dramatic language or exaggerated warnings.
+- Never use: "maybe", "possibly", "could be", "might be", "it seems".
+- Avoid generic advice like: "check spark plugs", "scan for codes", "replace the sensor".
+- Explain why the behavior points toward the failure.
+- Keep the report tight, premium, and professional.
+- Do not write long textbook paragraphs.
+- Do not write dramatic warnings.
 
 Mechanical Reasoning Rules:
 - If vibration changes instantly with throttle input, treat it as a torque-applied failure signal.
-- If vibration disappears when throttle is released, prioritize:
-  torque converter clutch instability,
-  clutch apply pressure instability,
-  driveline torque transfer,
-  mount load reaction,
-  or hydraulic apply instability
-  before tire or wheel imbalance.
+- If vibration disappears when throttle is released, prioritize torque converter clutch instability, clutch apply pressure instability, driveline torque transfer, mount load reaction, or hydraulic apply instability before tire or wheel imbalance.
+- Prioritize thermal behavior, load behavior, pressure instability, combustion quality, adaptive correction behavior, and control-system response.
 
-- Prioritize:
-  thermal behavior,
-  load behavior,
-  pressure instability,
-  combustion quality,
-  adaptive correction behavior,
-  and control-system response.
-
-Strict Output Structure:
+Strict Final Output Structure:
 
 Diagnosis status:
-[One-line diagnosis state.]
+analysis
+
+Final Mechanical Report:
+[One strong professional paragraph explaining the dominant failure path.]
 
 Likely issue:
-[Short, direct, premium engineering conclusion.]
+[Short direct conclusion.]
 
 Why it fits:
-[Explain why the symptom behavior strongly matches this failure path.]
+[Explain the strongest evidence only. Keep it tight.]
 
-What to inspect next:
-[Only high-value verification logic.]
+What to verify:
+[Professional verification logic only. No generic checklist.]
 
-What to do next:
-[Short professional next-step recommendation.]
+Next professional action:
+[One practical next step.]
 
 Risk level:
 [Low / Medium / High / Critical]
 
+Mechanic Notes:
+[One short expert workshop observation.]
+
 Answer options:
 None
-
-Mechanic Notes:
-[One short elite-level workshop observation.]
 `;
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ result: "Method not allowed" });
@@ -161,14 +123,21 @@ export default async function handler(req, res) {
     const askedQuestions = extractAskedQuestions(answerList);
     const dominantLock = buildLocalDominantLock(safeIssue, answerList);
 
-   const clientAnswerCount = Number(flowControl?.answerCount || answerList.length || 0);
+    const clientAnswerCount = Number(
+      flowControl?.answerCount || answerList.length || 0
+    );
 
-const readyForAnalysis =
-  hasObdCode ||
-  shouldForceFinal({ flowControl, hasObdCode, answerCount: clientAnswerCount }) ||
-  clientAnswerCount >= 2 ||
-  answerList.length >= 2;
-    
+    const readyForAnalysis =
+      hasObdCode ||
+      shouldForceFinal({
+        flowControl,
+        hasObdCode,
+        answerCount: clientAnswerCount,
+      }) ||
+      clientAnswerCount >= 1 ||
+      answerList.length >= 1 ||
+      diagnosticContext?.readiness?.readyForAnalysis === true;
+
     if (!readyForAnalysis) {
       const followUpPrompt = buildAIFollowUpPrompt({
         lang,
@@ -417,13 +386,8 @@ ${JSON.stringify(diagnosticContext, null, 2)}
 Rules:
 - Ask exactly ONE question.
 - Do not repeat or reword any already asked question.
-- Do not ask generic questions like "when does it happen?" unless no better question exists.
+- Do not ask generic questions.
 - The question must target the dominant symptom.
-- If the symptom is smoke/fuel smell, ask about exhaust color, fuel smell, misfire, or fuel economy.
-- If the symptom is no-start, separate crank/no-crank/click/security/fuel/ignition.
-- If the symptom is vibration, separate braking, speed, acceleration, idle, and steering-wheel feedback.
-- If the symptom is overheating, separate coolant loss, fan operation, thermostat behavior, and heater output.
-- If the symptom is burning smell, separate oil, coolant, clutch/brake, electrical, or belt smell.
 - Do not give answer buttons.
 - Do not mention AI.
 - Do not produce a final diagnosis.
@@ -548,37 +512,38 @@ Do NOT write inspection-only instructions.
 Do NOT tell the user to conduct a general inspection.
 Do NOT continue follow-up mode.
 Do NOT return a workshop checklist as the main answer.
+Do NOT use DRIVESHIFT TECHNICAL VERDICT.
+Do NOT use WHAT THE VEHICLE IS ACTUALLY DOING.
+Do NOT use WHY THE FAILURE APPEARS UNDER LOAD.
+Do NOT create a long engineering essay.
 
 Start the response exactly with:
 
 Diagnosis status:
 analysis
 
-Then deliver the complete final mechanical report using the required structure.
+Then write the final report using only this structure:
+
+Final Mechanical Report:
+Likely issue:
+Why it fits:
+What to verify:
+Next professional action:
+Risk level:
+Mechanic Notes:
+Answer options:
+None
+
 Critical writing rules:
-- The report must feel like a premium forensic engineering diagnosis.
-- Use deep mechanical reasoning.
-- Explain behavior, not just parts.
+- Keep the report compact, premium, and readable.
+- Use deep mechanical reasoning without overexplaining.
+- Lead with the strongest evidence.
 - Preserve the dominant symptom throughout the report.
-- Lead aggressively with the strongest evidence.
-- Do not sound uncertain unless evidence truly conflicts.
-- Do not produce generic checklist-style writing.
+- Do not ask more questions.
+- Do not write a generic checklist.
 - Do not sound like customer support.
-- Do not write short paragraphs.
-- Write like a master drivability engineer explaining the root failure path.
-- Explain WHY the behavior changes under load, heat, RPM, throttle, braking, or speed.
 - Mention secondary possibilities only as verification paths.
-- Never lose the original dominant symptom.
-- Avoid weak wording like:
-  "could be many things"
-  "maybe"
-  "possibly"
-  "hard to say"
-- Sound expensive, elite, technical, and convincing.
 - The report should feel more advanced than a dealership scan-tool summary.
-- Do not ask another question.
-- Answer options must remain None.
-- Mechanic Notes must contain real technician-level warnings and misdiagnosis traps.
 `;
 }
 
@@ -637,8 +602,8 @@ A vehicle symptom is required before a mechanical failure path can be isolated.
 async function requestOpenAIReport(prompt) {
   return requestOpenAIReportWithSettings({
     prompt,
-    temperature: 0.12,
-    maxTokens: 1600,
+    temperature: 0.08,
+    maxTokens: 1200,
     timeoutMs: 18000,
   });
 }
@@ -678,9 +643,10 @@ async function requestOpenAIReportWithSettings({
     return "";
   }
 }
+
 function shouldForceFinal({ flowControl, hasObdCode, answerCount = 0 }) {
   if (hasObdCode) return true;
-  if (answerCount >= 2) return true;
+  if (answerCount >= 1) return true;
 
   const decision = String(flowControl?.localDecision || "").toLowerCase().trim();
 
@@ -739,21 +705,16 @@ function cleanAnalysis(text) {
   );
 
   if (!/Diagnosis status:/i.test(clean)) {
-    clean = `Diagnosis status: analysis\n\n${clean}`;
+    clean = `Diagnosis status:\nanalysis\n\n${clean}`;
   }
 
   clean = clean.replace(
-    /Answer options:\s*[\s\S]*?(?=Mechanic Notes:|$)/i,
-    "Answer options:\nNone\n\n"
+    /Answer options:\s*[\s\S]*$/i,
+    "Answer options:\nNone"
   );
 
   if (!/Answer options:/i.test(clean)) {
     clean += "\n\nAnswer options:\nNone";
-  }
-
-  if (!/Mechanic Notes:/i.test(clean)) {
-    clean +=
-      "\n\nMechanic Notes:\nConfirm base mechanical integrity, voltage stability, and live data before replacing electronic components.";
   }
 
   return clean.trim();
@@ -838,7 +799,7 @@ function buildSmartFallbackQuestion({ lang, issue, dominantLock }) {
       : "Does the vibration show up while braking, accelerating, at a certain speed, or even at idle?";
   }
 
-  if (/overheat|overheating|coolant|sobrecalienta|coolant/.test(text)) {
+  if (/overheat|overheating|coolant|sobrecalienta/.test(text)) {
     return isEs
       ? "¿La temperatura sube parado, manejando en carretera, o después de perder coolant?"
       : "Does the temperature rise while sitting still, highway driving, or after losing coolant?";
@@ -861,11 +822,7 @@ function buildGreetingResponse(lang) {
   return `Diagnosis status: follow_up
 
 Voice summary:
-${
-  isEs
-    ? "Hola. Estoy listo; dime qué está haciendo el vehículo."
-    : "Hey. I’m ready; tell me what the vehicle is doing."
-}
+${isEs ? "Hola. Estoy listo; dime qué está haciendo el vehículo." : "Hey. I’m ready; tell me what the vehicle is doing."}
 
 Risk level:
 Low
@@ -874,11 +831,7 @@ Likely issue:
 Pending vehicle symptom.
 
 Why it fits:
-${
-  isEs
-    ? "Todavía no hay un síntoma mecánico para aislar."
-    : "There is no mechanical symptom to isolate yet."
-}
+${isEs ? "Todavía no hay un síntoma mecánico para aislar." : "There is no mechanical symptom to isolate yet."}
 
 What to inspect next:
 ${isEs ? "Dime qué está haciendo el vehículo." : "Tell me what the vehicle is doing."}
@@ -890,11 +843,7 @@ Answer options:
 None
 
 Mechanic Notes:
-${
-  isEs
-    ? "Sin un síntoma del vehículo, todavía no hay una ruta mecánica que separar."
-    : "Without a vehicle symptom, there is no mechanical path to separate yet."
-}`;
+${isEs ? "Sin un síntoma del vehículo, todavía no hay una ruta mecánica que separar." : "Without a vehicle symptom, there is no mechanical path to separate yet."}`;
 }
 
 function buildGeneralHelpResponse(lang) {
@@ -903,11 +852,7 @@ function buildGeneralHelpResponse(lang) {
   return `Diagnosis status: follow_up
 
 Voice summary:
-${
-  isEs
-    ? "Claro. Dime qué está haciendo el vehículo y empezamos."
-    : "Of course. Tell me what the vehicle is doing and we’ll start."
-}
+${isEs ? "Claro. Dime qué está haciendo el vehículo y empezamos." : "Of course. Tell me what the vehicle is doing and we’ll start."}
 
 Risk level:
 Low
@@ -916,11 +861,7 @@ Likely issue:
 Pending vehicle symptom.
 
 Why it fits:
-${
-  isEs
-    ? "El mensaje pide ayuda, pero todavía no incluye un síntoma mecánico específico."
-    : "The message asks for help but does not include a specific mechanical symptom yet."
-}
+${isEs ? "El mensaje pide ayuda, pero todavía no incluye un síntoma mecánico específico." : "The message asks for help but does not include a specific mechanical symptom yet."}
 
 What to inspect next:
 ${isEs ? "Describe el síntoma principal." : "Describe the main symptom."}
@@ -932,11 +873,7 @@ Answer options:
 None
 
 Mechanic Notes:
-${
-  isEs
-    ? "El primer síntoma define si el diagnóstico va hacia motor, transmisión, frenos, electricidad o suspensión."
-    : "The first symptom determines whether the diagnostic path goes toward engine, transmission, brakes, electrical, or suspension."
-}`;
+${isEs ? "El primer síntoma يحدد مسار التشخيص." : "The first symptom determines the diagnostic path."}`;
 }
 
 function buildEmptyFollowUp(lang) {
@@ -945,11 +882,7 @@ function buildEmptyFollowUp(lang) {
   return `Diagnosis status: follow_up
 
 Voice summary:
-${
-  isEs
-    ? "Estoy listo. Dime qué está haciendo el vehículo."
-    : "I’m ready. Tell me what the vehicle is doing."
-}
+${isEs ? "Estoy listo. Dime qué está haciendo el vehículo." : "I’m ready. Tell me what the vehicle is doing."}
 
 Risk level:
 Low
@@ -958,11 +891,7 @@ Likely issue:
 Pending vehicle symptom.
 
 Why it fits:
-${
-  isEs
-    ? "No hay suficiente información para iniciar el diagnóstico."
-    : "There is not enough information to start the diagnostic path."
-}
+${isEs ? "No hay suficiente información para iniciar el diagnóstico." : "There is not enough information to start the diagnostic path."}
 
 What to inspect next:
 ${isEs ? "Describe qué está haciendo el vehículo." : "Describe what the vehicle is doing."}
@@ -974,51 +903,46 @@ Answer options:
 None
 
 Mechanic Notes:
-${
-  isEs
-    ? "Un diagnóstico útil empieza con el síntoma principal, cuándo ocurre y bajo qué condición."
-    : "A useful diagnosis starts with the main symptom, when it happens, and under what operating condition."
-}`;
+${isEs ? "Un diagnóstico útil empieza con el síntoma principal." : "A useful diagnosis starts with the main symptom."}`;
 }
 
 function buildSafeAnalysisFallback(lang) {
   const isEs = lang === "es";
 
   if (isEs) {
-    return `Diagnosis status: analysis
+    return `Diagnosis status:
+analysis
 
-Voice summary:
+Final Mechanical Report:
 DriveShift no pudo completar un informe confiable desde el servidor.
-
-Risk level:
-Medium
 
 Likely issue:
 Error de respuesta diagnóstica del servidor.
 
 Why it fits:
-El cerebro diagnóstico no devolvió un reporte mecánico utilizable.
+El servidor no devolvió un reporte mecánico utilizable.
 
-What to inspect next:
-Intenta enviar el mismo síntoma otra vez.
+What to verify:
+Revisa los logs del backend.
 
-What to do next:
-Si se repite, revisa los logs del backend.
-
-Answer options:
-None
-
-Mechanic Notes:
-Este es un fallo de respuesta del servidor, no una conclusión mecánica. Revisa los logs antes de cambiar la lógica del diagnóstico.`;
-  }
-
-  return `Diagnosis status: analysis
-
-Voice summary:
-DriveShift could not complete a reliable diagnostic report from the server response.
+Next professional action:
+Corrige la respuesta del servidor y prueba otra vez.
 
 Risk level:
 Medium
+
+Mechanic Notes:
+Este es un fallo técnico, no una conclusión mecánica.
+
+Answer options:
+None`;
+  }
+
+  return `Diagnosis status:
+analysis
+
+Final Mechanical Report:
+DriveShift could not complete a reliable final report from the server response.
 
 Likely issue:
 Server diagnostic response failed.
@@ -1026,27 +950,28 @@ Server diagnostic response failed.
 Why it fits:
 The diagnostic brain did not return a usable mechanic report.
 
-What to inspect next:
-Try the request again with the same symptom.
+What to verify:
+Check the backend logs and OpenAI response.
 
-What to do next:
-If this repeats, check the backend logs.
-
-Answer options:
-None
-
-Mechanic Notes:
-This is a server response failure, not a mechanical conclusion. Check backend logs before changing diagnostic logic.`;
-}
-
-function buildErrorFallback() {
-  return `Diagnosis status: analysis
-
-Voice summary:
-DriveShift could not reach the diagnostic brain.
+Next professional action:
+Fix the backend response and test again.
 
 Risk level:
 Medium
+
+Mechanic Notes:
+This is a technical failure, not a mechanical conclusion.
+
+Answer options:
+None`;
+}
+
+function buildErrorFallback() {
+  return `Diagnosis status:
+analysis
+
+Final Mechanical Report:
+DriveShift could not reach the diagnostic brain.
 
 Likely issue:
 Backend diagnostic error.
@@ -1054,17 +979,20 @@ Backend diagnostic error.
 Why it fits:
 The server could not complete the diagnostic request.
 
-What to inspect next:
-Check the Vercel logs for the exact error.
+What to verify:
+Check the route, environment variables, Vercel logs, and OpenAI response.
 
-What to do next:
-Fix the backend error and try again.
+Next professional action:
+Fix the backend error and test again.
 
-Answer options:
-None
+Risk level:
+Medium
 
 Mechanic Notes:
-This failure is technical, not mechanical. Confirm the backend route, environment variables, and OpenAI response before testing vehicle logic.`;
+This failure is technical, not mechanical.
+
+Answer options:
+None`;
 }
 
 function extractObdCode(text) {
