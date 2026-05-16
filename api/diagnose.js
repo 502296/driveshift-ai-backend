@@ -540,6 +540,21 @@ ${safety.level || "Medium"}
 Safety instruction:
 ${safety.instruction || "Use realistic safety judgment."}
 
+FINAL MECHANICAL REPORT MODE:
+The diagnostic interview is complete.
+
+Do NOT ask another question.
+Do NOT write inspection-only instructions.
+Do NOT tell the user to conduct a general inspection.
+Do NOT continue follow-up mode.
+Do NOT return a workshop checklist as the main answer.
+
+Start the response exactly with:
+
+Diagnosis status:
+analysis
+
+Then deliver the complete final mechanical report using the required structure.
 Critical writing rules:
 - The report must feel like a premium forensic engineering diagnosis.
 - Use deep mechanical reasoning.
