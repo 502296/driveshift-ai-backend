@@ -71,23 +71,17 @@ Strict Output Structure:
 Diagnosis status:
 [One-line diagnosis state.]
 
-DRIVESHIFT TECHNICAL VERDICT:
-[Deliver the core engineering conclusion immediately. Short, direct, confident.]
+Likely issue:
+[Short, direct, premium engineering conclusion. Identify the dominant failure behavior and subsystem involved.]
 
-WHAT THE VEHICLE IS ACTUALLY DOING:
-[Explain the hidden mechanical or hydraulic behavior occurring internally.]
+Why it fits:
+[Explain why the symptoms, heat behavior, load behavior, throttle response, or pressure behavior point to this failure.]
 
-WHY THE FAILURE APPEARS UNDER LOAD:
-[Explain why the system loses stability under heat, boost, pressure, or torque demand.]
-
-FAILURE ESCALATION PATH:
-[Explain how the failure progresses if ignored.]
-
-WHAT SHOULD BE VERIFIED FIRST:
+What to inspect next:
 [Only high-value verification logic. No generic advice.]
 
-WHAT EXPERIENCED TECHNICIANS AVOID MISDIAGNOSING:
-[Explain the false path less experienced mechanics often take.]
+What to do next:
+[Give the practical next professional action. Short and clear.]
 
 Risk level:
 [Low / Medium / High / Critical]
