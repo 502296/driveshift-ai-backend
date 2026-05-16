@@ -2,7 +2,7 @@ import { buildDiagnosticContext } from "./helpers/diagnostic-core.js";
 
 import {
 parseLiveDataContext,
-buildObdIntelligence, // تم إصلاح التصدير ليتوافق مع مكتبتك إن وجد
+buildObdInsight,
 } from "./helpers/obd-intelligence.js";
 
 // ==========================================
@@ -94,11 +94,11 @@ const obdCode = extractObdCode(safeIssue);
 const hasObdCode = Boolean(obdCode);
 
 const liveDataContext = parseLiveDataContext(safeIssue);
-// إصلاح استدعاء الدالة ليتوافق مع كودك
-let obdInsight = "";
-if (typeof buildObdIntelligence === "function") {
-obdInsight = buildObdIntelligence({ code: obdCode || "", liveData: liveDataContext });
-}
+// إصلاح اسم الدالة المستدعاة هنا ليتطابق مع الـ Import الأصلي لمنع الانهيار
+const obdInsight = buildObdInsight({
+code: obdCode || "",
+liveData: liveDataContext,
+});
 
 const diagnosticContext = buildDiagnosticContext(safeIssue, answerList);
 const askedQuestions = extractAskedQuestions(answerList);
@@ -162,7 +162,6 @@ obdCode,
 obdInsight,
 });
 
-// تمرير خيار False لضمان الصرامة المطلقة أثناء التحليل النهائي للتقرير
 const aiText = await requestOpenAIReport(prompt, false);
 const result = cleanAnalysis(aiText);
 
@@ -174,6 +173,7 @@ result: buildSafeAnalysisFallback(lang),
 
 return res.status(200).json({ result });
 } catch (error) {
+// إرجاع الفولباك الآمن في حالة حدوث أي خطأ غير متوقع
 return res.status(200).json({
 result: buildErrorFallback(),
 });
@@ -427,34 +427,31 @@ prompt,
 temperature: 0.2,
 maxTokens: 400,
 timeoutMs: 10000,
-isFollowUp: true
 });
 }
 
-// تعديل الدالة لاستقبال معامل الصرامة للتحليل النهائي
+// دالة وسيطة لإرسال الإعدادات الدقيقة
 async function requestOpenAIReport(prompt, isFollowUp = false) {
 return requestOpenAIReportWithSettings({
 prompt,
-temperature: isFollowUp ? 0.1 : 0.0, // صفر مطلق للتقرير النهائي لمنع تشويه الهيدرز والخلط
-maxTokens: isFollowUp ? 800 : 500, // حجم مثالي مقتضب للتقرير لمنع الحشو والملل
+temperature: isFollowUp ? 0.1 : 0.0, // الصفر المطلق لمنع تشويه الهيدرز أثناء التحليل
+maxTokens: isFollowUp ? 800 : 500,
 timeoutMs: 18000,
-isFollowUp
 });
 }
 
+// تم إرجاع الـ API والـ URL للوضع القديم الأصلي لملفك لضمان عدم حدوث الانهيار
 async function requestOpenAIReportWithSettings({
 prompt,
 temperature,
 maxTokens,
 timeoutMs,
-isFollowUp
 }) {
 const controller = new AbortController();
 const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
 try {
-// تصحيح مسار الـ API الرسمي لشركة OpenAI لضمان توافقية عالية ومنع الانهيار
-const response = await fetch("https://api.openai.com/v1/chat/completions", {
+const response = await fetch("https://api.openai.com/v1/responses", {
 method: "POST",
 signal: controller.signal,
 headers: {
@@ -463,17 +460,9 @@ Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
 },
 body: JSON.stringify({
 model: process.env.DRIVESHIFT_MODEL || "gpt-4o-mini",
-messages: [
-{
-role: "system",
-content: isFollowUp
-? "You are an elite automotive helper."
-: "You are a strict text-formatting mechanical engine. You always output the structural headers exactly as written without combining or deleting them."
-},
-{ role: "user", content: prompt }
-],
-temperature: temperature,
-max_tokens: maxTokens,
+input: prompt, // إرجاع الهيكل المتوافق مع سيرفرك الوسيط المخصص
+temperature,
+max_output_tokens: maxTokens,
 }),
 });
 
@@ -481,10 +470,6 @@ clearTimeout(timeout);
 if (!response.ok) return "";
 
 const data = await response.json();
-// دعم فك حزمة النص من مخرجات الـ Chat Completions بشكل صحيح
-if (data.choices && data.choices[0] && data.choices[0].message) {
-return data.choices[0].message.content.trim();
-}
 return extractText(data).trim();
 } catch (_) {
 clearTimeout(timeout);
@@ -543,7 +528,6 @@ if (!/Diagnosis status:/i.test(clean)) {
 clean = `Diagnosis status:\nanalysis\n\n${clean}`;
 }
 
-// تم تعديل كود الفلترة لضمان عدم مسح العناوين الصادرة من الموديل الذكي الجديد
 clean = clean.replace(/Answer options:\s*[\s\S]*$/i, "Answer options:\nNone");
 
 if (!/Answer options:/i.test(clean)) {
@@ -611,14 +595,14 @@ if (/vibration|shake|shaking|vibra|vibración|vibracion/.test(text)) {
 return isEs ? "¿La vibración aparece al frenar, al acelerar, a cierta velocidad, o también en ralentí?" : "Does the vibration show up while braking, accelerating, at a certain speed, or even at idle?";
 }
 if (/overheat|overheating|coolant|sobrecalienta/.test(text)) {
-return isEs ? "¿La temperatura subه parado, manejando en carretera, o después de perder coolant?" : "Does the temperature rise while sitting still, highway driving, or after losing coolant?";
+return isEs ? "¿La temperatura sube parado, manejando en carretera, o después de perder coolant?" : "Does the temperature rise while sitting still, highway driving, or after losing coolant?";
 }
 if (/burning|smell|olor|quemado/.test(text)) {
 return isEs ? "¿El olor parece aceite quemado, plástico/eléctrico, coolant dulce, o freno/clutch caliente?" : "Does the smell seem like burnt oil, electrical plastic, sweet coolant, or hot brake/clutch material?";
 }
 
 return isEs
-? "¿Cuándo aparece más fuerte: al acelerar, frenar, girar, estar parado, o mantener velocidad constante?"
+? "¿Cuándo aparece más fuerte: al acelerar, frenار, girar, estar parado, o mantener velocidad constante?"
 : "When is it strongest: accelerating, braking, turning, sitting still, or holding steady speed?";
 }
 
