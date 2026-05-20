@@ -109,15 +109,14 @@ flowControl?.answerCount || answerList.length || 0
 
 const readyForAnalysis =
 hasObdCode ||
+(clientAnswerCount >= 2 && (
 shouldForceFinal({
 flowControl,
 hasObdCode,
 answerCount: clientAnswerCount,
 }) ||
-clientAnswerCount >= 1 ||
-answerList.length >= 1 ||
-diagnosticContext?.readiness?.readyForAnalysis === true;
-
+diagnosticContext?.readiness?.readyForAnalysis === true
+));
 if (!readyForAnalysis) {
 const followUpPrompt = buildAIFollowUpPrompt({
 lang,
