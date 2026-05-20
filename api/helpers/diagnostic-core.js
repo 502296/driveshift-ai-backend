@@ -183,46 +183,13 @@ export function detectDiagnosticReadiness(issue, answers, dominantSignals, compl
 const answerCount = countUserAnswers(answers);
 const text = buildCombinedText(issue, answers);
 
-const ignitionFuelLock = buildIgnitionFuelDominance(text);
-const smokeFuelLock = buildSmokeFuelDominance(text);
-const noStartLock = buildNoStartDominance(text);
-const brakeLock = buildBrakeDominance(text);
-const overheatLock = buildOverheatDominance(text);
+// الفرض الصارم لنظام السؤالين:
+// الحد الأدنى الافتراضي هو 2، وللحالات المتقدمة 3.
+let minimumQuestions = 2;
 
-let minimumQuestions = complexity?.minimumQuestions || 2;
-let reason = complexity?.reason || "standard diagnostic flow";
-
-const strongSignals = [
-"misfire",
-"rough under load",
-"engine feels rough",
-"loss of power",
-"loses power",
-"hesitating",
-"flashing check engine",
-"check engine light flashes",
-"brake",
-"overheating",
-"coolant",
-"burning smell",
-"oil pressure",
-"airbag",
-"srs",
-"can bus",
-"u-code",
-"u code",
-"transmission",
-"flared",
-"flare",
-"eps",
-"steering rack",
-"fuel trim",
-"black smoke",
-"fuel smell",
-"raw fuel",
-];
-
-const hasStrongSignal = includesAny(text, strongSignals);
+if (isAdvancedCase(text) || (complexity && complexity.minimumQuestions > 2)) {
+minimumQuestions = 3;
+}
 
 const hasFlowControl = Array.isArray(answers)
 ? answers.some((a) =>
@@ -232,35 +199,14 @@ String(a?.question || "")
 )
 : false;
 
-if (isAdvancedCase(text)) {
-minimumQuestions = 3;
-reason = "advanced technician-level input needs three technical narrowing questions";
-}
-
-if (hasStrongSignal) {
-minimumQuestions = Math.max(minimumQuestions, 2);
-reason = "strong diagnostic signals need a focused multi-step flow before final report";
-}
-
-if (ignitionFuelLock.locked || smokeFuelLock.locked) {
-minimumQuestions = 2;
-reason = "dominant fuel/ignition combustion path is strong enough for final analysis after two focused answers";
-}
-
-if (noStartLock.locked) {
-minimumQuestions = 2;
-reason = "no-start path becomes analyzable after crank/no-crank and basic condition separation";
-}
-
-if (brakeLock.locked || overheatLock.locked) {
-minimumQuestions = 2;
-reason = "safety-sensitive case should not be over-questioned before giving a clear action path";
-}
-
-minimumQuestions = clamp(minimumQuestions, 2, 3);
+// التعليل البرمجي للجاهزية
+const reason = answerCount < minimumQuestions
+? `System requires ${minimumQuestions} answers to lock diagnostic direction. Currently at ${answerCount}.`
+: "Sufficient diagnostic data captured for forensic analysis.";
 
 return {
 minimumQuestions,
+// لا يسمح بالتحليل أبداً إلا إذا تحقق شرط عدد الإجابات
 readyForAnalysis: hasFlowControl || answerCount >= minimumQuestions,
 reason,
 };
