@@ -478,8 +478,12 @@ return "";
 }
 
 function shouldForceFinal({ flowControl, hasObdCode, answerCount = 0 }) {
+// If there is an OBD code, we can analyze immediately as it is a hard signal.
 if (hasObdCode) return true;
-if (answerCount >= 1) return true;
+
+// STRICT RULE: We need at least 2 answers before allowing a final report.
+// This prevents the system from skipping the "3-TURN RULE".
+if (answerCount < 2) return false;
 
 const decision = String(flowControl?.localDecision || "").toLowerCase().trim();
 return (
