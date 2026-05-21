@@ -525,14 +525,8 @@ hasFlashingCel && hasLoadSymptom && hasSevereSymptom;
 const enoughFactsWithRepairHistory =
 enoughFactsForLoadMisfire && hasRepairHistory;
 
-if (
-  (enoughFactsForLoadMisfire || enoughFactsWithRepairHistory || noCodesScanned) &&
-  answerCount >= 2
-) {
-  return true;
-}
-
-if (answerCount < 2) return false;
+if (answerCount >= 2) return true;
+return false;
 
 const decision = String(flowControl?.localDecision || "").toLowerCase().trim();
 
