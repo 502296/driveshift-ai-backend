@@ -525,11 +525,12 @@ hasFlashingCel && hasLoadSymptom && hasSevereSymptom;
 const enoughFactsWithRepairHistory =
 enoughFactsForLoadMisfire && hasRepairHistory;
 
-if (enoughFactsForLoadMisfire || enoughFactsWithRepairHistory || noCodesScanned) {
-return true;
+if (
+  (enoughFactsForLoadMisfire || enoughFactsWithRepairHistory || noCodesScanned) &&
+  answerCount >= 2
+) {
+  return true;
 }
-
-if (diagnosticContext?.readiness?.readyForAnalysis === true) return true;
 
 if (answerCount < 2) return false;
 
