@@ -4,24 +4,20 @@ import {
 parseLiveDataContext,
 buildObdInsight,
 } from "./helpers/obd-intelligence.js";
+
 const DOCTOR_PROMPT = `
 Role:
-You are the "DriveShift Omni-Sovereign" — a world-class forensic automotive diagnostic intelligence system specialized in combustion analysis, drivability failures, load-sensitive misfires, fuel delivery faults, ignition instability, and mechanical failure behavior.
-You do not guess.
-You reason using failure physics, symptom correlation, live behavioral patterns, and system elimination logic.
+You are DriveShift, a premium forensic automotive diagnostic system.
+
+You reason using failure physics, symptom correlation, repair history, and system elimination logic.
 
 STRICT OPERATING PROTOCOLS:
 
 EXCLUSION & PROBABILITY CONTROL
 If the user says a component was recently replaced, reduce its diagnostic probability significantly.
-Do NOT recommend replacing the same part again unless there is strong evidence of:
-incorrect installation
-damaged connector
-carbon tracking
-defective new part
-incorrect gap/specification
-cylinder-specific failure evidence
-When a major system becomes less likely, pivot logically into the next most probable system.
+Do NOT recommend replacing the same part again unless there is strong evidence of incorrect installation, damaged connector, carbon tracking, defective new part, incorrect gap/specification, or cylinder-specific failure evidence.
+When a major system becomes less likely, pivot logically into the next most probable subsystem.
+
 FLASHING CHECK ENGINE LIGHT LAW
 A flashing check engine light indicates an active catalyst-damaging misfire event.
 Stay focused inside combustion-related systems:
@@ -30,16 +26,14 @@ Airflow
 Ignition
 Compression
 Exhaust restriction
-Do NOT randomly pivot to unrelated systems like suspension, steering, mounts, axles, or drivetrain unless the symptoms strongly support them.
+Do NOT randomly pivot to suspension, steering, mounts, axles, tires, or drivetrain for a flashing CEL unless the symptoms strongly prove a non-combustion issue.
+
 FORENSIC MEMORY
-Maintain memory of all user-confirmed facts during the session.
+Maintain memory of all user-confirmed facts.
 Never contradict previously confirmed information.
-Never hallucinate:
-codes
-scan results
-repairs
-measurements
-If codes were not scanned, explicitly recommend scanning instead of assuming code absence.
+Never hallucinate codes, scan results, repairs, or measurements.
+If codes were not scanned, recommend scanning instead of assuming code absence.
+
 DYNAMIC DIAGNOSTIC REASONING
 Prioritize symptom behavior:
 under load
@@ -47,20 +41,25 @@ hot vs cold
 idle vs acceleration
 RPM-linked vs speed-linked
 intermittent vs constant
-Use elimination reasoning naturally.
-Think like a master diagnostic technician, not a chatbot.
+
 TECHNICAL COMMUNICATION STYLE
 Sound calm, premium, precise, and professional.
 Avoid robotic wording.
 Avoid excessive warnings or fear language.
 Explain WHY the failure behavior matches the suspected system.
+
 STRICT OUTPUT FORMAT
-Use EXACTLY these headers with colons because the frontend parser depends on them.
+Use EXACTLY these headers with colons.
+Do not use Markdown bold.
 Do not invent additional headers.
-Keep formatting clean and readable.
+
 FINAL RESPONSE FORMAT:
+
+Diagnosis status:
+analysis
+
 Voice summary:
-[A short professional summary of the failure behavior.]
+[A short professional summary.]
 
 Risk level:
 [Low / Medium / High]
@@ -72,26 +71,33 @@ Why it fits:
 [Explain the failure physics and symptom correlation.]
 
 Evolutionary update:
-[If applicable: explain how recently replaced parts lowered probability and shifted diagnostic direction.]
+[Explain how replaced parts changed probability, if applicable.]
 
 What to inspect next:
+1. [Step 1]
+2. [Step 2]
+3. [Step 3]
 
-[Step 1]
-[Step 2]
-[Step 3]
 Mechanic notes:
-[One intelligent technician-level insight or verification direction.]
-IMPORTANT:
+[One technician-level insight.]
 
-Never recommend already-replaced parts as the primary fix without evidence.
-Never hallucinate missing data.
-Never leave the combustion domain during flashing misfire analysis unless strong evidence justifies it.
+Answer options:
+None
+
 Units: Imperial (USA)
 Language: English only
 Tone: Premium forensic diagnostic engineer
 `;
+
+export default async function handler(req, res) {
 try {
-const { issue, answers, language, vehicleProfile, flowControl } = req.body;
+if (req.method !== "POST") {
+return res.status(200).json({
+result: buildGeneralHelpResponse("en"),
+});
+}
+
+const { issue, answers, language, vehicleProfile, flowControl } = req.body || {};
 
 const lang = language === "es" ? "es" : "en";
 const safeIssue = String(issue || "").trim();
@@ -139,16 +145,20 @@ const clientAnswerCount = Number(
 flowControl?.answerCount || answerList.length || 0
 );
 
-const readyForAnalysis =
-hasObdCode ||
-(clientAnswerCount >= 2 && (
-shouldForceFinal({
+const forceFinal = shouldForceFinal({
 flowControl,
 hasObdCode,
 answerCount: clientAnswerCount,
-}) ||
-diagnosticContext?.readiness?.readyForAnalysis === true
-));
+issue: safeIssue,
+answers: answerList,
+diagnosticContext,
+});
+
+const readyForAnalysis =
+hasObdCode ||
+forceFinal ||
+diagnosticContext?.readiness?.readyForAnalysis === true;
+
 if (!readyForAnalysis) {
 const followUpPrompt = buildAIFollowUpPrompt({
 lang,
@@ -163,6 +173,7 @@ obdInsight,
 });
 
 const aiFollowUp = await requestOpenAIReport(followUpPrompt, true);
+
 const cleanedFollowUp = cleanFollowUp(aiFollowUp, {
 lang,
 issue: safeIssue,
@@ -208,10 +219,6 @@ result: buildErrorFallback(),
 });
 }
 }
-
-// ==========================================
-// HELPER FUNCTIONS (المكان الصحيح للدوال بالأسفل)
-// ==========================================
 
 function detectSimpleIntent(text) {
 const raw = String(text || "").trim();
@@ -278,7 +285,7 @@ const userAnswers = answers.length
 
 return `
 You are DriveShift, a premium mechanic-level diagnostic brain.
-Your job now is NOT to diagnose yet. Your job is to ask ONE sharp follow-up question that separates the most likely failure path.
+Your job now is NOT to diagnose yet. Ask ONE sharp follow-up question.
 
 Language:
 ${lang === "es" ? "Spanish only" : "English only"}
@@ -309,9 +316,9 @@ ${JSON.stringify(diagnosticContext, null, 2)}
 
 Rules:
 - Ask exactly ONE question.
-- Do not repeat or reword any already asked question.
+- Do not repeat any already asked question.
 - Do not ask generic questions.
-- Return exactly this format:
+- Use exactly this format:
 
 Diagnosis status:
 follow_up
@@ -337,7 +344,7 @@ Ask the same follow-up question in natural wording.
 Answer options:
 None
 
-Mechanic Notes:
+Mechanic notes:
 A short mechanic-level note explaining what this answer will separate.
 `;
 }
@@ -412,7 +419,10 @@ Safety level: ${safety.level || "Medium"}
 Safety instruction: ${safety.instruction || "Use realistic safety judgment."}
 
 FINAL MECHANICAL REPORT MODE:
-The diagnostic interview is complete. Follow the Strict Final Output Structure to the letter. Do not invent custom layouts or leave out the explicit section headers.
+The diagnostic interview is complete.
+Return only the exact final response format.
+Do not use Markdown bold.
+Do not invent custom headers.
 `;
 }
 
@@ -451,7 +461,7 @@ A natural sentence inviting the user to describe the vehicle problem.
 Answer options:
 None
 
-Mechanic Notes:
+Mechanic notes:
 A vehicle symptom is required before a mechanical failure path can be isolated.
 `;
 
@@ -467,7 +477,7 @@ async function requestOpenAIReport(prompt, isFollowUp = false) {
 return requestOpenAIReportWithSettings({
 prompt,
 temperature: isFollowUp ? 0.1 : 0.0,
-maxTokens: isFollowUp ? 800 : 500,
+maxTokens: isFollowUp ? 800 : 900,
 timeoutMs: 18000,
 });
 }
@@ -508,15 +518,56 @@ return "";
 }
 }
 
-function shouldForceFinal({ flowControl, hasObdCode, answerCount = 0 }) {
-// If there is an OBD code, we can analyze immediately as it is a hard signal.
+function shouldForceFinal({
+flowControl,
+hasObdCode,
+answerCount = 0,
+issue = "",
+answers = [],
+diagnosticContext,
+}) {
 if (hasObdCode) return true;
 
-// STRICT RULE: We need at least 2 answers before allowing a final report.
-// This prevents the system from skipping the "3-TURN RULE".
+const combinedText = `${issue || ""} ${(answers || [])
+.map((a) => `${a.question || ""} ${a.answer || ""}`)
+.join(" ")}`.toLowerCase();
+
+const hasFlashingCel =
+/flashing|flashes|blinking|blink/.test(combinedText) &&
+/check engine|cel|engine light|dashboard light/.test(combinedText);
+
+const hasLoadSymptom =
+/under load|accelerat|uphill|hill|merging|passing|heavy throttle|floor|towing|highway/.test(
+combinedText
+);
+
+const hasSevereSymptom =
+/shake|shaking|jitter|stumble|loss of power|misfire|rough/.test(combinedText);
+
+const hasRepairHistory =
+/replaced|changed|new|brand new|installed|swapped/.test(combinedText);
+
+const noCodesScanned =
+/haven't checked|not checked|no scan|not scanned|haven't scanned|didn't scan/.test(
+combinedText
+);
+
+const enoughFactsForLoadMisfire =
+hasFlashingCel && hasLoadSymptom && hasSevereSymptom;
+
+const enoughFactsWithRepairHistory =
+enoughFactsForLoadMisfire && hasRepairHistory;
+
+if (enoughFactsForLoadMisfire || enoughFactsWithRepairHistory || noCodesScanned) {
+return true;
+}
+
+if (diagnosticContext?.readiness?.readyForAnalysis === true) return true;
+
 if (answerCount < 2) return false;
 
 const decision = String(flowControl?.localDecision || "").toLowerCase().trim();
+
 return (
 decision === "final" ||
 decision === "analysis" ||
@@ -528,21 +579,26 @@ function cleanFollowUp(text, { lang, issue, askedQuestions, dominantLock }) {
 let clean = String(text || "").trim();
 if (!clean) return "";
 
-clean = clean.replace(/When to stop driving:/gi, "Mechanic Notes:");
+clean = clean.replace(/When to stop driving:/gi, "Mechanic notes:");
+clean = clean.replace(/Mechanic Notes:/gi, "Mechanic notes:");
 
 if (!/Diagnosis status:/i.test(clean)) {
-clean = `Diagnosis status: follow_up\n\n${clean}`;
+clean = `Diagnosis status:\nfollow_up\n\n${clean}`;
 }
 
-clean = clean.replace(/Diagnosis status:\s*analysis/i, "Diagnosis status: follow_up");
-clean = clean.replace(/Answer options:\s*[\s\S]*?(?=Mechanic Notes:|$)/i, "Answer options:\nNone\n\n");
+clean = clean.replace(/Diagnosis status:\s*analysis/i, "Diagnosis status:\nfollow_up");
+clean = clean.replace(
+/Answer options:\s*[\s\S]*?(?=Mechanic notes:|Mechanic Notes:|$)/i,
+"Answer options:\nNone\n\n"
+);
 
 if (!/Answer options:/i.test(clean)) {
 clean += "\n\nAnswer options:\nNone";
 }
 
-if (!/Mechanic Notes:/i.test(clean)) {
-clean += "\n\nMechanic Notes:\nThis answer separates the dominant failure path before parts are replaced.";
+if (!/Mechanic notes:/i.test(clean)) {
+clean +=
+"\n\nMechanic notes:\nThis answer separates the dominant failure path before parts are replaced.";
 }
 
 if (questionLooksRepeated(clean, askedQuestions)) {
@@ -552,37 +608,18 @@ return buildNaturalFallbackFollowUp({ lang, issue, dominantLock });
 return clean.trim();
 }
 
-// ==========================================
-// الدوال الجديدة المحدثة بالـ Markdown Bold
-// ==========================================
-
 function cleanAnalysis(text) {
 let clean = String(text || "").trim();
 if (!clean) return "";
 
-clean = clean.replace(/When to stop driving:/gi, "**Mechanic Notes:**");
-clean = clean.replace(/Mechanic Notes:/gi, "**Mechanic Notes:**");
-clean = clean.replace(/Diagnosis status:\s*follow_up/i, "Diagnosis status: analysis");
+clean = clean.replace(/When to stop driving:/gi, "Mechanic notes:");
+clean = clean.replace(/Mechanic Notes:/gi, "Mechanic notes:");
+clean = clean.replace(/\*\*/g, "");
+clean = clean.replace(/Diagnosis status:\s*follow_up/i, "Diagnosis status:\nanalysis");
 
 if (!/Diagnosis status:/i.test(clean)) {
 clean = `Diagnosis status:\nanalysis\n\n${clean}`;
 }
-
-const headersToFix = [
-"Final Mechanical Report",
-"Likely issue",
-"Why it fits",
-"What to verify",
-"Next professional action",
-"Risk level"
-];
-
-headersToFix.forEach(header => {
-const regex = new RegExp(`\\*\\*?${header}\\*\\*?:?`, "gi");
-clean = clean.replace(regex, `**${header}:**`);
-});
-
-clean = clean.replace(/Answer options:\s*[\s\S]*$/i, "Answer options:\nNone");
 
 if (!/Answer options:/i.test(clean)) {
 clean += "\n\nAnswer options:\nNone";
@@ -593,29 +630,32 @@ return clean.trim();
 
 function buildSafeAnalysisFallback(lang) {
 const isEs = lang === "es";
+
 if (isEs) {
 return `Diagnosis status:
 analysis
 
-**Final Mechanical Report:**
-DriveShift no pudo completar un informe confiable desde el servidor.
+Voice summary:
+DriveShift no pudo completar un informe confiable desde la respuesta del servidor.
 
-**Likely issue:**
-Error de respuesta diagnóstica del servidor.
-
-**Why it fits:**
-El servidor no devolvió un reporte mecánico utilizable.
-
-**What to verify:**
-Revisa los logs del backend.
-
-**Next professional action:**
-Corrige la respuesta del servidor y prueba otra vez.
-
-**Risk level:**
+Risk level:
 Medium
 
-**Mechanic Notes:**
+Likely issue:
+Error de respuesta diagnóstica del servidor.
+
+Why it fits:
+El servidor no devolvió un reporte mecánico utilizable.
+
+Evolutionary update:
+No se pudo completar la actualización diagnóstica.
+
+What to inspect next:
+1. Revisa los logs del backend.
+2. Verifica la respuesta de OpenAI.
+3. Prueba nuevamente con una solicitud corta.
+
+Mechanic notes:
 Este es un fallo técnico, no una conclusión mecánica.
 
 Answer options:
@@ -625,25 +665,27 @@ None`;
 return `Diagnosis status:
 analysis
 
-**Final Mechanical Report:**
+Voice summary:
 DriveShift could not complete a reliable final report from the server response.
 
-**Likely issue:**
-Server diagnostic response failed.
-
-**Why it fits:**
-The diagnostic brain did not return a usable mechanic report.
-
-**What to verify:**
-Check the backend logs and OpenAI response.
-
-**Next professional action:**
-Fix the backend response and test again.
-
-**Risk level:**
+Risk level:
 Medium
 
-**Mechanic Notes:**
+Likely issue:
+Server diagnostic response failed.
+
+Why it fits:
+The diagnostic brain did not return a usable mechanic report.
+
+Evolutionary update:
+No diagnostic refinement could be completed.
+
+What to inspect next:
+1. Check the backend logs.
+2. Verify the OpenAI response.
+3. Test again with a shorter request.
+
+Mechanic notes:
 This is a technical failure, not a mechanical conclusion.
 
 Answer options:
@@ -654,37 +696,129 @@ function buildErrorFallback() {
 return `Diagnosis status:
 analysis
 
-**Final Mechanical Report:**
+Voice summary:
 DriveShift could not reach the diagnostic brain.
 
-**Likely issue:**
-Backend diagnostic error.
-
-**Why it fits:**
-The server could not complete the diagnostic request.
-
-**What to verify:**
-Check the route, environment variables, and OpenAI response.
-
-**Next professional action:**
-Fix the backend error and test again.
-
-**Risk level:**
+Risk level:
 Medium
 
-**Mechanic Notes:**
+Likely issue:
+Backend diagnostic error.
+
+Why it fits:
+The server could not complete the diagnostic request.
+
+Evolutionary update:
+No diagnostic refinement could be completed.
+
+What to inspect next:
+1. Check the API route.
+2. Check environment variables.
+3. Check the OpenAI response.
+
+Mechanic notes:
 This failure is technical, not mechanical.
 
 Answer options:
 None`;
 }
 
-// ==========================================
-// بقية دوال المساعدة القديمة المستقرة
-// ==========================================
+function buildEmptyFollowUp(lang) {
+const isEs = lang === "es";
+
+return `Diagnosis status:
+follow_up
+
+Voice summary:
+${isEs ? "Describe el síntoma del vehículo para comenzar." : "Describe the vehicle symptom to begin."}
+
+Risk level:
+Low
+
+Likely issue:
+Pending vehicle symptom.
+
+Why it fits:
+${isEs ? "Aún no hay un síntoma mecánico para analizar." : "There is no mechanical symptom to analyze yet."}
+
+What to inspect next:
+${isEs ? "Cuéntame qué hace el vehículo y cuándo ocurre." : "Tell me what the vehicle is doing and when it happens."}
+
+What to do next:
+${isEs ? "Escribe el síntoma principal del vehículo." : "Type the main vehicle symptom."}
+
+Answer options:
+None
+
+Mechanic notes:
+A vehicle symptom is required before a failure path can be isolated.`;
+}
+
+function buildGreetingResponse(lang) {
+const isEs = lang === "es";
+
+return `Diagnosis status:
+follow_up
+
+Voice summary:
+${isEs ? "Estoy listo para ayudarte con el diagnóstico." : "I’m ready to help with the diagnosis."}
+
+Risk level:
+Low
+
+Likely issue:
+Pending vehicle symptom.
+
+Why it fits:
+${isEs ? "Todavía no se describió una falla del vehículo." : "No vehicle failure has been described yet."}
+
+What to inspect next:
+${isEs ? "Describe qué hace el vehículo y cuándo ocurre." : "Describe what the vehicle is doing and when it happens."}
+
+What to do next:
+${isEs ? "Escribe el síntoma principal." : "Type the main symptom."}
+
+Answer options:
+None
+
+Mechanic notes:
+A clear symptom starts the diagnostic path.`;
+}
+
+function buildGeneralHelpResponse(lang) {
+const isEs = lang === "es";
+
+return `Diagnosis status:
+follow_up
+
+Voice summary:
+${isEs ? "Puedo ayudarte a aislar la falla paso a paso." : "I can help isolate the fault step by step."}
+
+Risk level:
+Low
+
+Likely issue:
+Pending vehicle symptom.
+
+Why it fits:
+${isEs ? "Necesito el síntoma del vehículo para empezar." : "I need the vehicle symptom to begin."}
+
+What to inspect next:
+${isEs ? "Dime qué pasa, cuándo ocurre y si hay luces en el tablero." : "Tell me what happens, when it happens, and whether any dashboard lights appear."}
+
+What to do next:
+${isEs ? "Describe el problema del vehículo." : "Describe the vehicle problem."}
+
+Answer options:
+None
+
+Mechanic notes:
+The strongest diagnosis starts with symptom timing and operating condition.`;
+}
 
 function looksBad(text) {
 const clean = String(text || "").toLowerCase();
+
 return (
 !clean ||
 clean.includes("consult a mechanic") ||
@@ -700,7 +834,8 @@ function buildNaturalFallbackFollowUp({ lang, issue, dominantLock }) {
 const isEs = lang === "es";
 const q = buildSmartFallbackQuestion({ lang, issue, dominantLock });
 
-return `Diagnosis status: follow_up
+return `Diagnosis status:
+follow_up
 
 Voice summary:
 ${isEs ? "Necesito un dato más para separar la falla principal." : "I need one more detail to separate the main failure path."}
@@ -712,7 +847,7 @@ Likely issue:
 Pending diagnostic confirmation.
 
 Why it fits:
-${isEs ? "Ese detalle define si el problema viene de carga, combustión, combustible, frenos, dirección o tren motriz." : "That detail separates whether the fault is coming from load, combustion, fuel delivery, braking, steering, or drivetrain behavior."}
+${isEs ? "Ese detalle define el sistema correcto." : "That detail points the test toward the correct system."}
 
 What to inspect next:
 ${q}
@@ -723,8 +858,8 @@ ${q}
 Answer options:
 None
 
-Mechanic Notes:
-${isEs ? "La respuesta evita cambiar piezas por intuición y dirige la prueba hacia el sistema correcto." : "The answer prevents guessing at parts and points the test toward the correct system."}`;
+Mechanic notes:
+${isEs ? "La respuesta evita cambiar piezas por intuición." : "The answer prevents guessing at parts."}`;
 }
 
 function buildSmartFallbackQuestion({ lang, issue, dominantLock }) {
@@ -732,23 +867,37 @@ const isEs = lang === "es";
 const text = `${issue || ""} ${dominantLock || ""}`.toLowerCase();
 
 if (/smoke|humo|fuel smell|gas smell|gasolina/.test(text)) {
-return isEs ? "¿El humo es negro, blanco o azul, y huele a gasolina cruda?" : "Is the smoke black, white, or blue, and does it smell like raw fuel?";
+return isEs
+? "¿El humo es negro, blanco o azul, y huele a gasolina cruda?"
+: "Is the smoke black, white, or blue, and does it smell like raw fuel?";
 }
+
 if (/no start|won't start|crank|click|arranca|enciende/.test(text)) {
-return isEs ? "Cuando intentas arrancar, ¿el motor gira normal, solo hace clic, o no hace nada?" : "When you try to start it, does the engine crank normally, only click, or do nothing at all?";
+return isEs
+? "Cuando intentas arrancar, ¿el motor gira normal, solo hace clic, o no hace nada?"
+: "When you try to start it, does the engine crank normally, only click, or do nothing at all?";
 }
+
 if (/vibration|shake|shaking|vibra|vibración|vibracion/.test(text)) {
-return isEs ? "¿La vibración aparece al frenar, al acelerar, a cierta velocidad, o también en ralentí?" : "Does the vibration show up while braking, accelerating, at a certain speed, or even at idle?";
+return isEs
+? "¿La vibración aparece al frenar, al acelerar, a cierta velocidad, o también en ralentí?"
+: "Does the vibration show up while braking, accelerating, at a certain speed, or even at idle?";
 }
+
 if (/overheat|overheating|coolant|sobrecalienta/.test(text)) {
-return isEs ? "¿La temperatura sube parado, manejando en carretera, o después de perder coolant?" : "Does the temperature rise while sitting still, highway driving, or after losing coolant?";
+return isEs
+? "¿La temperatura sube parado, manejando en carretera, o después de perder coolant?"
+: "Does the temperature rise while sitting still, highway driving, or after losing coolant?";
 }
+
 if (/burning|smell|olor|quemado/.test(text)) {
-return isEs ? "¿El olor parece aceite quemado, plástico/eléctrico, coolant dulce, o freno/clutch caliente?" : "Does the smell seem like burnt oil, electrical plastic, sweet coolant, or hot brake/clutch material?";
+return isEs
+? "¿El olor parece aceite quemado, plástico/eléctrico, coolant dulce, o freno/clutch caliente?"
+: "Does the smell seem like burnt oil, electrical plastic, sweet coolant, or hot brake/clutch material?";
 }
 
 return isEs
-? "¿Cuándo aparece más fuerte: al acelerar, frenار, girar, estar parado, o mantener velocidad constante?"
+? "¿Cuándo aparece más fuerte: al acelerar, frenar, girar, estar parado, o mantener velocidad constante?"
 : "When is it strongest: accelerating, braking, turning, sitting still, or holding steady speed?";
 }
 
@@ -783,6 +932,7 @@ function questionLooksRepeated(text, askedQuestions) {
 if (!askedQuestions.length) return false;
 
 const clean = normalizeQuestionText(text);
+
 return askedQuestions.some((q) => {
 const oldQ = normalizeQuestionText(q);
 return oldQ && clean.includes(oldQ.slice(0, 45));
@@ -806,33 +956,34 @@ const text = `${issue || ""} ${(answers || [])
 
 const locks = [];
 
+if (/flashing|flashes|blinking|check engine|cel/.test(text) && /shake|shaking|misfire|stumble|jitter/.test(text)) {
+locks.push("Catalyst-damaging misfire / combustion instability under load");
+}
+
 if (/black smoke|humo negro|raw fuel|fuel smell|gas smell|gasolina/.test(text)) {
 locks.push("Fuel-rich combustion / overfueling / injector or fuel control fault");
 }
+
 if (/white smoke|humo blanco|coolant|sweet smell|coolant loss/.test(text)) {
 locks.push("Coolant intrusion or overheating-related failure path");
 }
+
 if (/blue smoke|humo azul|burning oil|oil consumption/.test(text)) {
 locks.push("Oil consumption through rings, valve seals, turbo, or PCV path");
 }
+
 if (/overheat|overheating|hot|temperature|sobrecalienta/.test(text)) {
 locks.push("Cooling system heat rejection failure");
 }
+
 if (/burning smell|smell burning|electrical smell|plastic smell|olor a quemado/.test(text)) {
 locks.push("Heat, friction, oil leak, belt slip, brake drag, or electrical overheating path");
 }
+
 if (/no start|won't start|does not start|crank|click|arranca|enciende/.test(text)) {
 locks.push("No-start path: battery, starter, crank signal, fuel, ignition, or security authorization");
 }
-if (/vibration|shake|shaking|vibra|vibración|vibracion/.test(text)) {
-locks.push("Rotational imbalance, engine misfire, brake pulsation, driveline, tire, or mount-related vibration");
-}
-if (/brake|brakes|abs|freno|frenos/.test(text)) {
-locks.push("Brake hydraulic, friction, ABS, rotor, caliper, or wheel-speed signal path");
-}
-if (/steering|wheel pulls|eps|dirección|direccion/.test(text)) {
-locks.push("Steering assist, alignment, suspension geometry, tire pull, or torque sensor path");
-}
+
 if (/misfire|rough idle|idle|stumble|stall|stalls/.test(text)) {
 locks.push("Combustion instability: ignition, injector, air leak, compression, timing, or fuel trim path");
 }
@@ -851,6 +1002,7 @@ return data.output
 .join("\n")
 .trim();
 }
+
 return "";
 } catch (_) {
 return "";
