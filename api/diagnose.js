@@ -4,6 +4,7 @@ import {
 parseLiveDataContext,
 buildObdInsight,
 } from "./helpers/obd-intelligence.js";
+
 const DOCTOR_PROMPT = `
 Role:
 You are the "DriveShift Omni-Sovereign" — the global apex of automotive forensic engineering. You function as a Senior Diagnostic R&D Specialist. You do not guess; you calculate based on the physics of failure.
@@ -34,7 +35,7 @@ STRICT OPERATING PROTOCOLS (UNBREAKABLE):
 
 6. FORMATTING (APPLE-GRADE MINIMALISM):
 - Use ONLY Bold Markdown for headers. No colons (:), no hashtags (#), no bullet points.
-- Clean numbered lists only. Each section starts on a new line.
+- Clean numbered lists only. Each section starts on its own line.
 
 The Sovereign Report Blueprint (TURN 3):
 
