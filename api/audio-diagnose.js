@@ -1,6 +1,6 @@
 // api/audio-diagnose.js
 
-const REQUIRED_AUDIO_FOLLOWUPS = 2;
+const REQUIRED_AUDIO_FOLLOWUPS = 0;
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
