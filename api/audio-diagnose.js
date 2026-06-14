@@ -2,6 +2,9 @@
 
 const REQUIRED_AUDIO_FOLLOWUPS = 0;
 
+const TRANSCRIBE_MODEL = "gpt-4o-transcribe";
+const DIAGNOSIS_MODEL = "gpt-4o";
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ result: "Method not allowed" });
@@ -48,6 +51,9 @@ export default async function handler(req, res) {
       prompt,
       audioBase64,
       audioFormat: format,
+      lang,
+      selectedSoundPattern,
+      durationSeconds: duration,
     });
 
     const result = cleanAndFinalize({
@@ -116,7 +122,7 @@ Output exactly this format:
 Diagnosis status: analysis
 
 Voice summary:
-[a calm mechanic-style observation that immediately reflects the sound behavior and what an experienced technician would notice first]
+[a calm mechanic-style observation that immediately reflects the recorded vehicle sound context and what an experienced technician would notice first]
 
 Risk level:
 [High or Medium or Low]
@@ -145,7 +151,7 @@ When to stop driving:
   return `
 You are DriveShift Doctor, a premium automotive sound diagnostic system.
 
-You are listening to a real vehicle audio recording.
+You are analyzing a real vehicle sound recording.
 Do not mention AI.
 Do not say the recording is unclear unless the audio is truly empty.
 Do not ask the user to record again unless the audio is missing.
@@ -153,9 +159,9 @@ Do not produce generic advice.
 Do not recommend replacing parts immediately unless evidence is strong.
 
 Important:
-The follow-up questions are only confirmation questions.
-They must feel like the scanner already listened to the sound.
-Do not make the user feel the diagnosis depends only on button answers.
+If the audio transcription has little or no speech, that is normal.
+This is a vehicle sound scan, not a voice note.
+Use the selected sound source, recording duration, vehicle profile, and mechanical rules to infer the most likely sound direction.
 
 Language:
 ${isEs ? "Spanish only" : "English only"}
@@ -188,55 +194,14 @@ Diagnostic rules:
 - If sound is scraping/grinding, raise brake, dust shield, rotor/pad contact, pulley contact, or metal rubbing.
 
 Reasoning style:
-
 You are not a chatbot.
 You are a world-class diagnostic mechanic inside a premium scan system.
-
-Your reports must sound like an elite master technician inspecting a real vehicle in a high-end professional workshop.
-
 Think mechanically.
 Prioritize real-world mechanical reasoning over generic advice.
-
 Do not overreact.
 Do not guess randomly.
-Do not recommend replacing parts unless the evidence supports it.
-
-The report must feel:
-- calm
-- intelligent
-- technical
-- trustworthy
-- experience-driven
-- like a real technician inspected the vehicle personally
-- like someone experienced actually listened to the sound
-- natural and observant
-
-The technician should sound observant and mechanically experienced.
-The report should feel like someone actually listened to the vehicle carefully.
+The report must feel calm, technical, trustworthy, and experience-driven.
 Each section should introduce new mechanical insight instead of repeating the same wording.
-Avoid repeating the same cause too many times unless the evidence is extremely strong.
-
-When analyzing sounds:
-- connect RPM behavior to engine/internal rotating components
-- connect speed-related noise to wheels, bearings, tires, axles, or driveline
-- connect braking behavior to brake hardware or rotor issues
-- connect metallic ticking to lifters, injectors, exhaust leaks, pulleys, or valvetrain depending on evidence
-- connect deep knocking carefully to internal engine risk only if evidence supports it
-
-Explain WHY the sound matches the suspected system.
-Mention patterns a real mechanic would notice.
-
-Avoid robotic phrases.
-Do not repeat the same wording across sections.
-Each section should feel naturally written by an experienced mechanic.
-The Voice summary should sound like a real first impression after hearing the vehicle.
-
-Avoid generic repair-shop language.
-Avoid sounding like customer support.
-
-The final report should feel like:
-"A senior diagnostic technician inspected the vehicle personally."
-
 No markdown bullets.
 No confidence percentage.
 
@@ -244,51 +209,130 @@ ${outputFormat}
 `;
 }
 
-async function requestAudioDiagnosis({ prompt, audioBase64, audioFormat }) {
+async function requestAudioDiagnosis({
+  prompt,
+  audioBase64,
+  audioFormat,
+  lang,
+  selectedSoundPattern,
+  durationSeconds,
+}) {
   try {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: "gpt-4o",
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: prompt,
-              },
-              {
-                type: "input_audio",
-                input_audio: {
-                  data: audioBase64,
-                  format: audioFormat,
-                },
-              },
-            ],
-          },
-        ],
-        temperature: 0.05,
-        max_tokens: 1400,
-      }),
+    const audioBuffer = Buffer.from(audioBase64, "base64");
+    const mimeType = getAudioMimeType(audioFormat);
+    const extension = getAudioExtension(audioFormat);
+
+    console.log("DRIVESHIFT AUDIO INPUT:", {
+      audioFormat,
+      mimeType,
+      extension,
+      bytes: audioBuffer.length,
+      durationSeconds,
+      selectedSoundPattern,
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.log("OPENAI AUDIO ERROR:", response.status, errorText);
+    const formData = new FormData();
+    const audioBlob = new Blob([audioBuffer], { type: mimeType });
+
+    formData.append("file", audioBlob, `driveshift-audio.${extension}`);
+    formData.append("model", TRANSCRIBE_MODEL);
+
+    if (lang === "en" || lang === "es") {
+      formData.append("language", lang);
+    }
+
+    formData.append(
+      "prompt",
+      "This is an automotive diagnostic recording. It may contain engine noise, ticking, knocking, belt squeal, wheel hum, brake scraping, exhaust rattle, vibration, or very little human speech."
+    );
+
+    const transcriptResponse = await fetch(
+      "https://api.openai.com/v1/audio/transcriptions",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        },
+        body: formData,
+      }
+    );
+
+    if (!transcriptResponse.ok) {
+      const errorText = await transcriptResponse.text();
+      console.log(
+        "OPENAI TRANSCRIBE ERROR:",
+        transcriptResponse.status,
+        errorText
+      );
       return "";
     }
 
-    const data = await response.json();
-    console.log("OPENAI AUDIO RESPONSE:", JSON.stringify(data, null, 2));
+    const transcriptData = await transcriptResponse.json();
+    const transcript = String(transcriptData?.text || "").trim();
 
-    return data?.choices?.[0]?.message?.content || "";
+    console.log("DRIVESHIFT AUDIO TRANSCRIPT:", transcript || "[no speech]");
+
+    const diagnosisResponse = await fetch(
+      "https://api.openai.com/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: DIAGNOSIS_MODEL,
+          messages: [
+            {
+              role: "system",
+              content:
+                "You are DriveShift Doctor, a premium automotive diagnostic assistant. Give structured mechanic-style diagnostic reports only.",
+            },
+            {
+              role: "user",
+              content: `${prompt}
+
+Audio processing result:
+The audio file was received and processed through the modern transcription pipeline.
+
+Important vehicle-sound note:
+This scan is mainly for mechanical sound diagnosis. The transcript may be empty or short because the recording may contain mostly vehicle noise rather than human speech.
+
+Transcript:
+${transcript || "No clear human speech was detected in the vehicle recording."}
+
+Use this information carefully:
+- Do not treat an empty transcript as a failed recording.
+- Use the selected sound source, vehicle profile, duration, and diagnostic rules.
+- If there is not enough exact acoustic detail, still produce a careful preliminary diagnostic report based on the selected area and mechanical reasoning.
+- Avoid saying the scan failed unless the audio was missing.`,
+            },
+          ],
+          temperature: 0.05,
+          max_tokens: 1400,
+        }),
+      }
+    );
+
+    if (!diagnosisResponse.ok) {
+      const errorText = await diagnosisResponse.text();
+      console.log(
+        "OPENAI DIAGNOSIS ERROR:",
+        diagnosisResponse.status,
+        errorText
+      );
+      return "";
+    }
+
+    const diagnosisData = await diagnosisResponse.json();
+    console.log(
+      "OPENAI DIAGNOSIS RESPONSE:",
+      JSON.stringify(diagnosisData, null, 2)
+    );
+
+    return diagnosisData?.choices?.[0]?.message?.content || "";
   } catch (error) {
-    console.log("OPENAI AUDIO REQUEST FAILED:", error);
+    console.log("OPENAI AUDIO MODERN PIPELINE FAILED:", error);
     return "";
   }
 }
@@ -349,7 +393,29 @@ function normalizeAudioFormat(format) {
   const f = String(format || "").toLowerCase().trim();
 
   if (f.includes("wav")) return "wav";
-  if (f.includes("mp3")) return "mp3";
+  if (f.includes("mp3") || f.includes("mpeg")) return "mp3";
+  if (f.includes("m4a") || f.includes("mp4")) return "m4a";
+  if (f.includes("webm")) return "webm";
+
+  return "wav";
+}
+
+function getAudioMimeType(format) {
+  const f = normalizeAudioFormat(format);
+
+  if (f === "mp3") return "audio/mpeg";
+  if (f === "m4a") return "audio/mp4";
+  if (f === "webm") return "audio/webm";
+
+  return "audio/wav";
+}
+
+function getAudioExtension(format) {
+  const f = normalizeAudioFormat(format);
+
+  if (f === "mp3") return "mp3";
+  if (f === "m4a") return "m4a";
+  if (f === "webm") return "webm";
 
   return "wav";
 }
