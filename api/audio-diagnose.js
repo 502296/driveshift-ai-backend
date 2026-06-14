@@ -253,7 +253,7 @@ async function requestAudioDiagnosis({ prompt, audioBase64, audioFormat }) {
         Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
       },
       body: JSON.stringify({
-        model: process.env.DRIVESHIFT_AUDIO_MODEL || "gpt-4o-audio-preview",
+        model: "gpt-4o-mini-audio-preview",
         messages: [
           {
             role: "user",
