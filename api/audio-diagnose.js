@@ -136,7 +136,7 @@ What to inspect next:
 [describe the exact inspection path a professional workshop technician would follow to isolate the sound source]
 
 What to do next:
-[give calm professional guidance that balances mechanical risk, drivability, and urgency without sounding dramatic]
+[give calm professional guidance about recommended inspection and maintenance steps without making driving safety judgments, risk ratings, or repair guarantees]
 
 Answer options:
 None
