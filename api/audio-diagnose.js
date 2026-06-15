@@ -140,9 +140,6 @@ What to do next:
 
 Answer options:
 None
-
-When to stop driving:
-[clear safety advice]
 `;
 
   return `
