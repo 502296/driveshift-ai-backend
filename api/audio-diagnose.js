@@ -129,8 +129,7 @@ Most likely: [strongest cause]
 Secondary possibility: [second cause]
 Less likely: [third cause]
 
-Why it fits:
-[explain the mechanical behavior behind the sound like a senior diagnostic technician inspecting the vehicle in person. Mention how RPM, heat, load, speed, braking, or vibration behavior affects the suspected system]
+[briefly explain in 3-5 sentences why the sound matches the listed possibilities]
 
 What to inspect next:
 [describe the exact inspection path a professional workshop technician would follow to isolate the sound source]
