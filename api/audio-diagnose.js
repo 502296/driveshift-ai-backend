@@ -122,17 +122,18 @@ Output exactly this format:
 Diagnosis status: analysis
 
 Voice summary:
-[a calm mechanic-style observation that immediately reflects the recorded vehicle sound context and what an experienced technician would notice first]
+[a calm mechanic-style observation in 2-3 sentences that reflects the recorded vehicle sound context and what an experienced technician would notice first]
 
 Likely issue:
 Most likely: [strongest cause]
 Secondary possibility: [second cause]
 Less likely: [third cause]
 
-[briefly explain in 3-5 sentences why the sound matches the listed possibilities]
+Why it fits:
+[briefly explain in 2-4 sentences why the sound matches the listed possibilities. Avoid repeating information already stated in Voice Summary or Likely Issue.]
 
 What to inspect next:
-[describe the exact inspection path a professional workshop technician would follow to isolate the sound source]
+[list the first components and systems a technician should inspect to verify the cause. Keep the section concise.]
 
 What to do next:
 [give calm professional guidance about recommended inspection and maintenance steps without making driving safety judgments, risk ratings, or repair guarantees]
@@ -150,6 +151,10 @@ Do not say the recording is unclear unless the audio is truly empty.
 Do not ask the user to record again unless the audio is missing.
 Do not produce generic advice.
 Do not recommend replacing parts immediately unless evidence is strong.
+Do not include risk level.
+Do not include driving safety judgment.
+Do not include "when to stop driving".
+Do not present the result as a confirmed repair order.
 
 Important:
 If the audio transcription has little or no speech, that is normal.
@@ -193,8 +198,11 @@ Think mechanically.
 Prioritize real-world mechanical reasoning over generic advice.
 Do not overreact.
 Do not guess randomly.
+Keep reports concise.
+Avoid repeating the same reasoning across sections.
+Each section should add new information.
+Limit each section to practical technician-level observations.
 The report must feel calm, technical, trustworthy, and experience-driven.
-Each section should introduce new mechanical insight instead of repeating the same wording.
 No markdown bullets.
 No confidence percentage.
 
@@ -279,7 +287,7 @@ async function requestAudioDiagnosis({
             {
               role: "system",
               content:
-                "You are DriveShift Doctor, a premium automotive diagnostic assistant. Give structured mechanic-style diagnostic reports only.",
+                "You are DriveShift Doctor, a premium automotive diagnostic assistant. Give structured mechanic-style diagnostic reports only. Do not include risk levels, driving safety judgments, or confirmed repair orders.",
             },
             {
               role: "user",
@@ -298,11 +306,14 @@ Use this information carefully:
 - Do not treat an empty transcript as a failed recording.
 - Use the selected sound source, vehicle profile, duration, and diagnostic rules.
 - If there is not enough exact acoustic detail, still produce a careful preliminary diagnostic report based on the selected area and mechanical reasoning.
-- Avoid saying the scan failed unless the audio was missing.`,
+- Avoid saying the scan failed unless the audio was missing.
+- Do not include risk level.
+- Do not include when to stop driving.
+- Do not make driving safety judgments.`,
             },
           ],
           temperature: 0.05,
-          max_tokens: 1400,
+          max_tokens: 1100,
         }),
       }
     );
@@ -345,6 +356,8 @@ function cleanAndFinalize({ text, mode, lang }) {
     .replace(/\*\*/g, "")
     .replace(/`/g, "")
     .replace(/Confidence:\s*[\s\S]*?(?=\n[A-Z][A-Za-z ]+:|$)/gi, "")
+    .replace(/Risk level:\s*[\s\S]*?(?=\n[A-Z][A-Za-z ]+:|$)/gi, "")
+    .replace(/When to stop driving:\s*[\s\S]*$/gi, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
@@ -371,15 +384,18 @@ function cleanAndFinalize({ text, mode, lang }) {
   }
 
   if (/Answer options:/i.test(clean)) {
-    clean = clean.replace(
-      /Answer options:\s*[\s\S]*?(?=When to stop driving:|$)/i,
-      "Answer options:\nNone\n\n"
-    );
+    clean = clean.replace(/Answer options:\s*[\s\S]*$/i, "Answer options:\nNone");
   } else {
     clean += "\n\nAnswer options:\nNone";
   }
 
-  return clean.trim();
+  clean = clean
+    .replace(/Risk level:\s*[\s\S]*?(?=\n[A-Z][A-Za-z ]+:|$)/gi, "")
+    .replace(/When to stop driving:\s*[\s\S]*$/gi, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  return clean;
 }
 
 function normalizeAudioFormat(format) {
@@ -502,28 +518,22 @@ function buildNoAudioResponse(lang) {
 Voice summary:
 No recibí una grabación útil para analizar el sonido.
 
-Risk level:
-Medium
-
 Likely issue:
 Most likely: Audio recording was missing or too short
 Secondary possibility: Microphone permission or upload issue
-Less likely: Confirmed mechanical failure from this recording
+Less likely: Confirmed mechanical diagnosis from this recording
 
 Why it fits:
-The uploaded audio was not long enough or strong enough to analyze.
+The uploaded audio was not long enough or strong enough to support a useful sound-based assessment.
 
 What to inspect next:
-Record 7 to 10 seconds close to the sound source with no talking in the background.
+Check microphone permission, make sure the phone is close to the selected sound source, and record 7 to 10 seconds with no talking in the background.
 
 What to do next:
-Try the audio scan again.
+Try the audio scan again with a clearer recording near the sound source.
 
 Answer options:
-None
-
-When to stop driving:
-Deja de manejar si el sonido es fuerte, metálico profundo, aparece humo, olor a quemado, sobrecalentamiento, pérdida de potencia o una luz roja.`;
+None`;
   }
 
   return `Diagnosis status: analysis
@@ -531,28 +541,22 @@ Deja de manejar si el sonido es fuerte, metálico profundo, aparece humo, olor a
 Voice summary:
 I did not receive a usable recording to analyze the sound.
 
-Risk level:
-Medium
-
 Likely issue:
 Most likely: Audio recording was missing or too short
 Secondary possibility: Microphone permission or upload issue
-Less likely: Confirmed mechanical failure from this recording
+Less likely: Confirmed mechanical diagnosis from this recording
 
 Why it fits:
-The uploaded audio was not long enough or strong enough to analyze.
+The uploaded audio was not long enough or strong enough to support a useful sound-based assessment.
 
 What to inspect next:
-Record 7 to 10 seconds close to the sound source with no talking in the background.
+Check microphone permission, make sure the phone is close to the selected sound source, and record 7 to 10 seconds with no talking in the background.
 
 What to do next:
-Try the audio scan again.
+Try the audio scan again with a clearer recording near the sound source.
 
 Answer options:
-None
-
-When to stop driving:
-Stop driving if the sound is loud, deep metallic, smoke appears, you smell burning, the engine overheats, power drops, or a red warning light comes on.`;
+None`;
 }
 
 function buildSafeErrorResponse(lang) {
@@ -562,28 +566,22 @@ function buildSafeErrorResponse(lang) {
 Voice summary:
 The sound was received, but the final audio analysis did not complete.
 
-Risk level:
-Medium
-
 Likely issue:
 Most likely: Audio analysis connection issue
 Secondary possibility: Unsupported audio format
-Less likely: Confirmed mechanical failure from this attempt
+Less likely: Confirmed mechanical diagnosis from this attempt
 
 Why it fits:
-The recording reached the backend, but the audio model did not return a final diagnostic response.
+The recording reached the backend, but the diagnostic response did not complete.
 
 What to inspect next:
-Try the scan again once. If the sound is engine-side, compare whether it follows RPM, cold start, idle, or acceleration.
+Check the selected sound area and recording format, then try one more scan with 7 to 10 seconds near the sound source.
 
 What to do next:
-Repeat the scan with 7 to 10 seconds near the sound source.
+Repeat the scan once. If the issue continues, save the recording and have a qualified technician inspect the sound source directly.
 
 Answer options:
-None
-
-When to stop driving:
-Deja de manejar si el sonido se vuelve fuerte, metálico, aparece humo, olor a quemado, sobrecalentamiento, pérdida de potencia o una luz roja.`;
+None`;
   }
 
   return `Diagnosis status: analysis
@@ -591,26 +589,20 @@ Deja de manejar si el sonido se vuelve fuerte, metálico, aparece humo, olor a q
 Voice summary:
 The sound was received, but the final audio analysis did not complete.
 
-Risk level:
-Medium
-
 Likely issue:
 Most likely: Audio analysis connection issue
 Secondary possibility: Unsupported audio format
-Less likely: Confirmed mechanical failure from this attempt
+Less likely: Confirmed mechanical diagnosis from this attempt
 
 Why it fits:
-The recording reached the backend, but the audio model did not return a final diagnostic response.
+The recording reached the backend, but the diagnostic response did not complete.
 
 What to inspect next:
-Try the scan again once. If the sound is engine-side, compare whether it follows RPM, cold start, idle, or acceleration.
+Check the selected sound area and recording format, then try one more scan with 7 to 10 seconds near the sound source.
 
 What to do next:
-Repeat the scan with 7 to 10 seconds near the sound source.
+Repeat the scan once. If the issue continues, save the recording and have a qualified technician inspect the sound source directly.
 
 Answer options:
-None
-
-When to stop driving:
-Stop driving if the sound becomes loud, metallic, smoke appears, you smell burning, the engine overheats, power drops, or a red warning light comes on.`;
+None`;
 }
