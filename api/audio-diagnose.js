@@ -124,9 +124,6 @@ Diagnosis status: analysis
 Voice summary:
 [a calm mechanic-style observation that immediately reflects the recorded vehicle sound context and what an experienced technician would notice first]
 
-Risk level:
-[High or Medium or Low]
-
 Likely issue:
 Most likely: [strongest cause]
 Secondary possibility: [second cause]
