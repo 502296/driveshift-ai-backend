@@ -37,10 +37,25 @@ import {
 const MAX_FOLLOW_UPS = 5;
 
 const INTERVIEW_TIMEOUT_MS = 12_000;
-const REPORT_TIMEOUT_MS = 24_000;
+
+/*
+ * Final report generation is substantially heavier than the
+ * interview decision.
+ *
+ * Give structured report generation enough time to complete
+ * before DriveShift aborts the upstream request.
+ */
+const REPORT_TIMEOUT_MS = 50_000;
 
 const INTERVIEW_MAX_OUTPUT_TOKENS = 800;
-const REPORT_MAX_OUTPUT_TOKENS = 4_500;
+
+/*
+ * The final structured report contains substantially more output
+ * than the interview decision.
+ *
+ * This is a ceiling, not a target.
+ */
+const REPORT_MAX_OUTPUT_TOKENS = 25_000;
 
 const DEFAULT_MODEL = "gpt-5.6";
 
@@ -333,6 +348,13 @@ const DIAGNOSTIC_REPORT_SCHEMA = {
 
           supportingEvidenceIds: {
             type: "array",
+
+            /*
+             * Must match semantic integrity validation:
+             * every ranked hypothesis requires at least one
+             * supporting evidence item.
+             */
+            minItems: 1,
 
             maxItems: 4,
 
@@ -857,6 +879,8 @@ Rank strongest first.
 
 supportingEvidenceIds and contradictingEvidenceIds may reference only evidence
 IDs that actually exist in this report.
+
+Every hypothesis must reference at least one supporting evidence ID.
 
 Each hypothesis must contain one specific verification step capable of
 materially confirming or rejecting it.
@@ -1634,28 +1658,29 @@ async function generateFinalDiagnosticReport({
 
       vehicleProfile,
     );
+
   const confidenceResult =
-  buildDiagnosticConfidence({
-    evidence:
-      normalized.evidence,
+    buildDiagnosticConfidence({
+      evidence:
+        normalized.evidence,
 
-    hypotheses:
-      normalized.hypotheses,
+      hypotheses:
+        normalized.hypotheses,
 
-    primaryHypothesisId:
-      normalized
-        .hypotheses?.[0]
-        ?.id ||
-      "",
+      primaryHypothesisId:
+        normalized
+          .hypotheses?.[0]
+          ?.id ||
+        "",
 
-    verificationPath:
-      normalized.verificationPath,
+      verificationPath:
+        normalized.verificationPath,
 
-    diagnosticContext,
-  });
+      diagnosticContext,
+    });
 
-normalized.confidence =
-  confidenceResult.level;
+  normalized.confidence =
+    confidenceResult.level;
 
   if (
     !validateReportIntegrity(
@@ -1786,7 +1811,7 @@ Produce the structured report now.
 /*
  * Avoid sending raw_input/interview_context again inside the
  * structured diagnostic context.
-
+ *
  * Evidence already has dedicated sections above.
  *
  * This prevents the same user observation from being duplicated
@@ -2102,16 +2127,47 @@ async function requestStructuredResponse({
     const data =
       await response.json();
 
+    /*
+     * Give Vercel logs enough information to distinguish:
+     *
+     * - output-token exhaustion
+     * - another incomplete-response reason
+     *
+     * without logging complaint text or private user evidence.
+     */
     if (
       data?.status ===
       "incomplete"
     ) {
       console.error(
         "DriveShift OpenAI response incomplete:",
+        {
+          reason:
+            data
+              ?.incomplete_details
+              ?.reason ||
+            "unknown",
 
-        data
-          ?.incomplete_details ||
-          "unknown reason",
+          model:
+            data?.model ||
+            model,
+
+          outputTokens:
+            data
+              ?.usage
+              ?.output_tokens ??
+            null,
+
+          reasoningTokens:
+            data
+              ?.usage
+              ?.output_tokens_details
+              ?.reasoning_tokens ??
+            null,
+
+          maxOutputTokens:
+            maxOutputTokens,
+        },
       );
 
       return null;
