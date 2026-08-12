@@ -1634,6 +1634,28 @@ async function generateFinalDiagnosticReport({
 
       vehicleProfile,
     );
+  const confidenceResult =
+  buildDiagnosticConfidence({
+    evidence:
+      normalized.evidence,
+
+    hypotheses:
+      normalized.hypotheses,
+
+    primaryHypothesisId:
+      normalized
+        .hypotheses?.[0]
+        ?.id ||
+      "",
+
+    verificationPath:
+      normalized.verificationPath,
+
+    diagnosticContext,
+  });
+
+normalized.confidence =
+  confidenceResult.level;
 
   if (
     !validateReportIntegrity(
