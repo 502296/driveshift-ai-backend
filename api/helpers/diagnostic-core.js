@@ -7,66 +7,573 @@ import { buildMechanicalPrioritization } from "./mechanical-prioritization-engin
    DRIVESHIFT — DIAGNOSTIC CORE
    ============================================================
 
-   Purpose:
-   - Build disciplined structured context from the current session.
-   - Consume signal-extractor.js as the canonical signal source.
-   - Build higher-order mechanical patterns without re-inventing
-     symptom detection.
-   - Preserve negative evidence.
-   - Avoid fixed-question diagnostic gates.
-   - Provide downstream reasoning engines with traceable context.
-
-   This module does NOT:
-   - decide the final diagnosis,
-   - confirm a failed component,
-   - assign the final user-facing confidence,
-   - force a fixed number of interview questions,
-   - override stronger raw evidence.
-
-   Diagnostic interview readiness is owned by /api/diagnose.js.
+   Core rules:
+   - User-authored evidence is mechanically authoritative input.
+   - DriveShift-generated questions are context, not evidence.
+   - Short YES / NO answers are translated conservatively into
+     semantic evidence only when the question clearly identifies
+     a known signal.
+   - Negative observations remain explicit negative evidence.
+   - No fixed question count determines readiness.
+   - Routing heuristics never confirm a failed component.
    ============================================================ */
 
-const CONTEXT_VERSION = "2.0";
-
+const CONTEXT_VERSION = "2.1";
 const MAX_NORMAL_FOLLOW_UPS = 5;
+
+/* ============================================================
+   CANONICAL SIGNAL PHRASES FOR SHORT YES / NO ANSWERS
+   ============================================================ */
+
+const SIGNAL_EVIDENCE_PHRASES = Object.freeze({
+  smoke: {
+    positive: "smoke",
+    negative: "no smoke",
+  },
+
+  black_smoke: {
+    positive: "black smoke",
+    negative: "no black smoke",
+  },
+
+  white_smoke: {
+    positive: "white smoke",
+    negative: "no white smoke",
+  },
+
+  blue_smoke: {
+    positive: "blue smoke",
+    negative: "no blue smoke",
+  },
+
+  severe_smoke: {
+    positive: "heavy smoke",
+    negative: "no heavy smoke",
+  },
+
+  fuel_smell: {
+    positive: "fuel smell",
+    negative: "no fuel smell",
+  },
+
+  overheating: {
+    positive: "overheating",
+    negative: "no overheating",
+  },
+
+  coolant_loss: {
+    positive: "coolant loss",
+    negative: "no coolant loss",
+  },
+
+  heat_related: {
+    positive: "heat related",
+    negative: "not heat related",
+  },
+
+  cold_related: {
+    positive: "only when cold",
+    negative: "not only when cold",
+  },
+
+  vibration: {
+    positive: "vibration",
+    negative: "no vibration",
+  },
+
+  rough_idle: {
+    positive: "rough idle",
+    negative: "no rough idle",
+  },
+
+  acceleration_issue: {
+    positive: "loss of power",
+    negative: "no loss of power",
+  },
+
+  load_sensitive: {
+    positive: "worse under load",
+    negative: "not worse under load",
+  },
+
+  speed_sensitive: {
+    positive: "worse with speed",
+    negative: "not worse with speed",
+  },
+
+  braking_issue: {
+    positive: "brake vibration",
+    negative: "no brake vibration",
+  },
+
+  critical_braking_issue: {
+    positive: "braking control lost",
+    negative: "braking control not lost",
+  },
+
+  startup_issue: {
+    positive: "starting issue",
+    negative: "starts normally",
+  },
+
+  no_crank: {
+    positive: "no crank",
+    negative: "cranks normally",
+  },
+
+  slow_crank: {
+    positive: "slow crank",
+    negative: "cranks at normal speed",
+  },
+
+  intermittent: {
+    positive: "intermittent",
+    negative: "not intermittent",
+  },
+
+  improves_with_speed: {
+    positive: "improves when driving",
+    negative: "does not improve when driving",
+  },
+
+  idle_or_stopped_related: {
+    positive: "at idle",
+    negative: "not at idle",
+  },
+});
 
 /* ============================================================
    ANSWER COUNT
    ============================================================ */
 
-/*
- * Count only actual answered diagnostic follow-ups.
- *
- * Legacy metadata entries are ignored defensively even though
- * the current Flutter client no longer inserts them.
- */
 export function countUserAnswers(answers) {
   if (!Array.isArray(answers)) {
     return 0;
   }
 
   return answers.filter((item) => {
-    const answer =
-      String(item?.answer || "").trim();
-
-    const question =
-      String(item?.question || "")
-        .toLowerCase()
-        .trim();
+    const answer = String(item?.answer || "").trim();
+    const question = String(item?.question || "").trim();
 
     if (!answer) {
       return false;
     }
 
-    if (
-      question.includes("vehicle profile") ||
-      question.includes("driveshift flow control")
-    ) {
+    if (isLegacyMetadataQuestion(question)) {
       return false;
     }
 
     return true;
   }).length;
+}
+
+/* ============================================================
+   USER EVIDENCE TEXT
+   ============================================================ */
+
+/*
+ * This is the ONLY text that should be used for:
+ * - signal extraction
+ * - raw mechanical phrase detection
+ * - system routing
+ * - OBD/live-data extraction in diagnose.js
+ *
+ * DriveShift questions are never inserted directly.
+ */
+export function buildUserEvidenceText(
+  issue,
+  answers = []
+) {
+  return buildEvidenceEntries(
+    issue,
+    answers
+  )
+    .flatMap((entry) => entry.semantic_text)
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+/* ============================================================
+   INTERVIEW CONTEXT
+   ============================================================ */
+
+/*
+ * Question + answer history remains useful to the reasoning model,
+ * but it must stay separate from mechanical evidence extraction.
+ */
+export function buildInterviewContextText(
+  issue,
+  answers = []
+) {
+  const parts = [];
+
+  const complaint = String(issue || "").trim();
+
+  if (complaint) {
+    parts.push(
+      `Initial complaint: ${complaint}`
+    );
+  }
+
+  if (!Array.isArray(answers)) {
+    return parts.join("\n");
+  }
+
+  for (const item of answers) {
+    const question = String(
+      item?.question || ""
+    ).trim();
+
+    const answer = String(
+      item?.answer || ""
+    ).trim();
+
+    if (!answer) {
+      continue;
+    }
+
+    if (isLegacyMetadataQuestion(question)) {
+      continue;
+    }
+
+    if (question) {
+      parts.push(
+        `Question: ${question}`
+      );
+    }
+
+    parts.push(
+      `Answer: ${answer}`
+    );
+  }
+
+  return parts
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+/* ============================================================
+   EVIDENCE ENTRIES
+   ============================================================ */
+
+function buildEvidenceEntries(
+  issue,
+  answers = []
+) {
+  const entries = [];
+
+  const complaint = String(issue || "").trim();
+
+  if (complaint) {
+    entries.push({
+      source: "initial_complaint",
+      question: "",
+      answer: complaint,
+      semantic_text: [
+        complaint,
+      ],
+      interpretation:
+        "direct_user_observation",
+    });
+  }
+
+  if (!Array.isArray(answers)) {
+    return entries;
+  }
+
+  for (const item of answers) {
+    const question = String(
+      item?.question || ""
+    ).trim();
+
+    const answer = String(
+      item?.answer || ""
+    ).trim();
+
+    if (!answer) {
+      continue;
+    }
+
+    if (isLegacyMetadataQuestion(question)) {
+      continue;
+    }
+
+    const binary =
+      classifyBinaryAnswer(
+        answer
+      );
+
+    if (
+      binary &&
+      question
+    ) {
+      const semanticEvidence =
+        buildBinaryAnswerEvidence(
+          question,
+          binary
+        );
+
+      if (
+        semanticEvidence.length >
+        0
+      ) {
+        entries.push({
+          source: "follow_up",
+          question,
+          answer,
+          semantic_text:
+            semanticEvidence,
+          interpretation:
+            binary === "yes"
+              ? "affirmed_question_signal"
+              : "denied_question_signal",
+        });
+
+        continue;
+      }
+    }
+
+    /*
+     * Non-binary answers are user-authored evidence directly.
+     *
+     * Example:
+     * "Only at idle."
+     * "It shakes above 60 mph."
+     * "P0302."
+     */
+    entries.push({
+      source: "follow_up",
+      question,
+      answer,
+      semantic_text: [
+        answer,
+      ],
+      interpretation:
+        "direct_follow_up_observation",
+    });
+  }
+
+  return entries;
+}
+
+/* ============================================================
+   SHORT YES / NO SEMANTIC TRANSLATION
+   ============================================================ */
+
+function classifyBinaryAnswer(
+  value
+) {
+  const clean =
+    normalizeShortAnswer(
+      value
+    );
+
+  const yesAnswers =
+    new Set([
+      "yes",
+      "yeah",
+      "yep",
+      "yup",
+      "correct",
+      "true",
+      "it does",
+      "yes it does",
+      "yes it is",
+      "yes it has",
+      "sí",
+      "si",
+      "correcto",
+    ]);
+
+  const noAnswers =
+    new Set([
+      "no",
+      "nope",
+      "false",
+      "not at all",
+      "it does not",
+      "it doesn't",
+      "no it does not",
+      "no it doesn't",
+      "no it is not",
+      "no it isn't",
+      "no it has not",
+      "no it hasn't",
+      "nunca",
+    ]);
+
+  if (
+    yesAnswers.has(
+      clean
+    )
+  ) {
+    return "yes";
+  }
+
+  if (
+    noAnswers.has(
+      clean
+    )
+  ) {
+    return "no";
+  }
+
+  return null;
+}
+
+function normalizeShortAnswer(
+  value
+) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[.,!?¿¡]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildBinaryAnswerEvidence(
+  question,
+  binary
+) {
+  const questionSignals =
+    extractSignals(
+      question
+    ).signals || {};
+
+  let keys =
+    Object.entries(
+      questionSignals
+    )
+      .filter(
+        ([, active]) =>
+          active === true
+      )
+      .map(
+        ([key]) =>
+          key
+      );
+
+  /*
+   * Prevent broad smoke from duplicating a specific smoke color.
+   */
+  if (
+    keys.some((key) =>
+      [
+        "black_smoke",
+        "white_smoke",
+        "blue_smoke",
+      ].includes(key)
+    )
+  ) {
+    keys =
+      keys.filter(
+        (key) =>
+          key !== "smoke"
+      );
+  }
+
+  /*
+   * Critical brake signal already contains the stronger meaning.
+   */
+  if (
+    keys.includes(
+      "critical_braking_issue"
+    )
+  ) {
+    keys =
+      keys.filter(
+        (key) =>
+          key !== "braking_issue"
+      );
+  }
+
+  const phrases = [];
+
+  for (const key of keys) {
+    const definition =
+      SIGNAL_EVIDENCE_PHRASES[
+        key
+      ];
+
+    if (!definition) {
+      continue;
+    }
+
+    const phrase =
+      binary === "yes"
+        ? definition.positive
+        : definition.negative;
+
+    if (phrase) {
+      phrases.push(
+        phrase
+      );
+    }
+  }
+
+  return [
+    ...new Set(
+      phrases
+    ),
+  ];
+}
+
+/* ============================================================
+   EVIDENCE SNAPSHOT
+   ============================================================ */
+
+function buildEvidenceSnapshot(
+  issue,
+  answers = []
+) {
+  const userEvidenceText =
+    buildUserEvidenceText(
+      issue,
+      answers
+    );
+
+  const interviewContext =
+    buildInterviewContextText(
+      issue,
+      answers
+    );
+
+  const evidenceEntries =
+    buildEvidenceEntries(
+      issue,
+      answers
+    );
+
+  const extracted =
+    extractSignals(
+      userEvidenceText
+    );
+
+  const rawEvidence =
+    buildRawEvidenceFlags(
+      userEvidenceText
+    );
+
+  const locks =
+    buildDiagnosticLocks({
+      text:
+        userEvidenceText,
+
+      extracted,
+
+      rawEvidence,
+    });
+
+  return {
+    userEvidenceText,
+    interviewContext,
+    evidenceEntries,
+    extracted,
+    rawEvidence,
+    locks,
+  };
 }
 
 /* ============================================================
@@ -77,32 +584,27 @@ export function detectDominantSignals(
   issue,
   answers = []
 ) {
-  const combined =
-    buildCombinedText(
+  const snapshot =
+    buildEvidenceSnapshot(
       issue,
       answers
     );
 
-  const extracted =
-    extractSignals(combined);
+  return buildDominantSignalSummary(
+    snapshot
+  );
+}
 
-  const rawEvidence =
-    buildRawEvidenceFlags(
-      combined
-    );
-
-  const locks =
-    buildDiagnosticLocks({
-      text: combined,
-      extracted,
-      rawEvidence,
-    });
+function buildDominantSignalSummary(
+  snapshot
+) {
+  const {
+    extracted,
+    rawEvidence,
+    locks,
+  } = snapshot;
 
   const signals = [];
-
-  /* ----------------------------------------------------------
-     Combustion / fuel
-     ---------------------------------------------------------- */
 
   if (
     locks.ignitionFuel.locked
@@ -120,10 +622,6 @@ export function detectDominantSignals(
     );
   }
 
-  /* ----------------------------------------------------------
-     Starting
-     ---------------------------------------------------------- */
-
   if (
     locks.noStart.locked
   ) {
@@ -132,10 +630,6 @@ export function detectDominantSignals(
     );
   }
 
-  /* ----------------------------------------------------------
-     Vibration
-     ---------------------------------------------------------- */
-
   if (
     locks.vibration.locked
   ) {
@@ -143,10 +637,6 @@ export function detectDominantSignals(
       locks.vibration.label
     );
   }
-
-  /* ----------------------------------------------------------
-     Brakes
-     ---------------------------------------------------------- */
 
   if (
     locks.brake.locked
@@ -158,10 +648,6 @@ export function detectDominantSignals(
     );
   }
 
-  /* ----------------------------------------------------------
-     Cooling
-     ---------------------------------------------------------- */
-
   if (
     locks.overheat.locked
   ) {
@@ -171,18 +657,15 @@ export function detectDominantSignals(
   }
 
   if (
-    extracted.behavior_relationships?.includes(
-      "airflow_dependent_cooling_pattern"
-    )
+    extracted.behavior_relationships
+      ?.includes(
+        "airflow_dependent_cooling_pattern"
+      )
   ) {
     signals.push(
       "airflow-dependent cooling behavior"
     );
   }
-
-  /* ----------------------------------------------------------
-     Performance
-     ---------------------------------------------------------- */
 
   if (
     extracted.signals
@@ -201,10 +684,6 @@ export function detectDominantSignals(
       "rough-idle combustion behavior"
     );
   }
-
-  /* ----------------------------------------------------------
-     Raw high-value observations not covered by base extractor
-     ---------------------------------------------------------- */
 
   if (
     rawEvidence.flashingCheckEngine
@@ -286,12 +765,6 @@ export function detectDominantSignals(
     );
   }
 
-  /*
-   * The output is contextual evidence only.
-   *
-   * It must never be interpreted downstream as confirmation of
-   * a failed component.
-   */
   return [
     ...new Set(
       signals
@@ -303,39 +776,31 @@ export function detectDominantSignals(
    COMPLEXITY
    ============================================================ */
 
-/*
- * Complexity is descriptive only.
- *
- * It no longer imposes a fixed question minimum.
- *
- * /api/diagnose.js owns the adaptive interview and asks another
- * question only when that answer has material diagnostic value.
- */
 export function detectComplexity(
   issue,
   dominantSignals = [],
   answers = []
 ) {
-  const text =
-    buildCombinedText(
+  const snapshot =
+    buildEvidenceSnapshot(
       issue,
       answers
     );
 
-  const extracted =
-    extractSignals(text);
+  return buildComplexityFromSnapshot(
+    snapshot,
+    dominantSignals
+  );
+}
 
-  const rawEvidence =
-    buildRawEvidenceFlags(
-      text
-    );
-
-  const locks =
-    buildDiagnosticLocks({
-      text,
-      extracted,
-      rawEvidence,
-    });
+function buildComplexityFromSnapshot(
+  snapshot,
+  dominantSignals
+) {
+  const {
+    userEvidenceText,
+    locks,
+  } = snapshot;
 
   const signalCount =
     Array.isArray(
@@ -345,7 +810,9 @@ export function detectComplexity(
       : 0;
 
   if (
-    isAdvancedCase(text)
+    isAdvancedCase(
+      userEvidenceText
+    )
   ) {
     return {
       level:
@@ -382,13 +849,16 @@ export function detectComplexity(
         MAX_NORMAL_FOLLOW_UPS,
 
       reason:
-        "Critical braking language is present. Safety direction takes priority over interview length.",
+        "Critical braking evidence is present. Safety guidance takes priority over interview length.",
     };
   }
 
   if (
     locks.overheat.locked ||
-    locks.brake.locked
+    locks.brake.locked ||
+    isSafetySensitive(
+      userEvidenceText
+    )
   ) {
     return {
       level:
@@ -404,7 +874,7 @@ export function detectComplexity(
         MAX_NORMAL_FOLLOW_UPS,
 
       reason:
-        "Cooling or braking evidence is present. Ask only questions that improve immediate safety or fault isolation.",
+        "Safety-sensitive evidence is present. Ask only questions that materially improve immediate safety or fault isolation.",
     };
   }
 
@@ -426,7 +896,7 @@ export function detectComplexity(
         MAX_NORMAL_FOLLOW_UPS,
 
       reason:
-        "Strong combustion-related evidence exists. Further questions should discriminate between competing failure families rather than repeat generic symptom checks.",
+        "Strong combustion-related evidence exists. Further questions should separate competing failure families rather than repeat generic symptom checks.",
     };
   }
 
@@ -447,7 +917,7 @@ export function detectComplexity(
         MAX_NORMAL_FOLLOW_UPS,
 
       reason:
-        "Starting evidence is present. Additional questions should separate crank, no-crank, power, authorization, fuel, ignition, and signal paths only when unresolved.",
+        "Starting evidence is present. Additional questioning should separate crank state and the relevant electrical, authorization, fuel, ignition, or engine-signal branch only when unresolved.",
     };
   }
 
@@ -468,12 +938,14 @@ export function detectComplexity(
         MAX_NORMAL_FOLLOW_UPS,
 
       reason:
-        "Multiple meaningful signals are present. Ask only the discriminator most likely to change diagnostic ranking.",
+        "Multiple meaningful signals are present. Ask only the discriminator most likely to change ranking.",
     };
   }
 
   if (
-    isSimpleLowRisk(text) &&
+    isSimpleLowRisk(
+      userEvidenceText
+    ) &&
     signalCount === 0
   ) {
     return {
@@ -508,7 +980,7 @@ export function detectComplexity(
       MAX_NORMAL_FOLLOW_UPS,
 
     reason:
-      "Interview depth is determined by diagnostic information value rather than a fixed question count.",
+      "Interview depth is determined by information value rather than a fixed number of questions.",
   };
 }
 
@@ -517,12 +989,10 @@ export function detectComplexity(
    ============================================================ */
 
 /*
- * IMPORTANT:
+ * Compatibility metadata only.
  *
- * This function is retained for compatibility with existing code,
- * but it is no longer a hard diagnostic gate.
- *
- * The adaptive interview decision belongs to diagnose.js.
+ * diagnose.js is the sole owner of the actual adaptive
+ * ready-vs-follow-up decision.
  */
 export function detectDiagnosticReadiness(
   issue,
@@ -530,36 +1000,51 @@ export function detectDiagnosticReadiness(
   dominantSignals = [],
   complexity = null
 ) {
+  const snapshot =
+    buildEvidenceSnapshot(
+      issue,
+      answers
+    );
+
+  return buildReadinessFromSnapshot(
+    snapshot,
+    answers,
+    dominantSignals,
+    complexity
+  );
+}
+
+function buildReadinessFromSnapshot(
+  snapshot,
+  answers,
+  dominantSignals,
+  complexity
+) {
   const answerCount =
     countUserAnswers(
       answers
     );
 
-  const text =
-    buildCombinedText(
-      issue,
-      answers
-    );
-
-  const extracted =
-    extractSignals(text);
-
-  const rawEvidence =
-    buildRawEvidenceFlags(
-      text
-    );
+  const {
+    extracted,
+    rawEvidence,
+  } = snapshot;
 
   const hasMeaningfulSignal =
     Object.values(
       extracted.signals || {}
     ).some(Boolean);
 
+  const hasNegativeEvidence =
+    Object.keys(
+      extracted.negated_signals || {}
+    ).length > 0;
+
   const hasBehaviorRelationship =
     Array.isArray(
       extracted.behavior_relationships
     ) &&
-    extracted.behavior_relationships.length >
-      0;
+    extracted.behavior_relationships.length > 0;
 
   const hasHighValueRawEvidence =
     Object.values(
@@ -570,8 +1055,7 @@ export function detectDiagnosticReadiness(
     Array.isArray(
       dominantSignals
     ) &&
-    dominantSignals.length >
-      0;
+    dominantSignals.length > 0;
 
   return {
     mode:
@@ -585,17 +1069,12 @@ export function detectDiagnosticReadiness(
 
     answerCount,
 
-    /*
-     * Null is intentional.
-     *
-     * No helper module should override the adaptive interview
-     * decision made by /api/diagnose.js.
-     */
     readyForAnalysis:
       null,
 
     evidenceAvailable:
       hasMeaningfulSignal ||
+      hasNegativeEvidence ||
       hasBehaviorRelationship ||
       hasHighValueRawEvidence ||
       hasDominantContext,
@@ -605,7 +1084,7 @@ export function detectDiagnosticReadiness(
       "unknown",
 
     reason:
-      "Readiness is decided by the adaptive interview in /api/diagnose.js based on whether another answer would materially improve diagnosis, verification, or safety.",
+      "Readiness is decided by /api/diagnose.js according to whether another answer would materially improve diagnosis, verification, or safety.",
   };
 }
 
@@ -617,53 +1096,39 @@ export function buildDiagnosticContext(
   issue,
   answers = []
 ) {
-  const combined =
-    buildCombinedText(
+  const snapshot =
+    buildEvidenceSnapshot(
       issue,
       answers
     );
 
-  const extracted =
-    extractSignals(
-      combined
-    );
-
-  const rawEvidence =
-    buildRawEvidenceFlags(
-      combined
-    );
-
-  const locks =
-    buildDiagnosticLocks({
-      text: combined,
-      extracted,
-      rawEvidence,
-    });
+  const {
+    userEvidenceText,
+    interviewContext,
+    evidenceEntries,
+    extracted,
+    rawEvidence,
+    locks,
+  } = snapshot;
 
   const dominantSignals =
-    detectDominantSignals(
-      issue,
-      answers
+    buildDominantSignalSummary(
+      snapshot
     );
 
   const complexity =
-    detectComplexity(
-      issue,
-      dominantSignals,
-      answers
+    buildComplexityFromSnapshot(
+      snapshot,
+      dominantSignals
     );
 
   const readiness =
-    detectDiagnosticReadiness(
-      issue,
+    buildReadinessFromSnapshot(
+      snapshot,
       answers,
       dominantSignals,
       complexity
     );
-
-  /* ----------------------------------------------------------
-     Existing downstream engines
-     ---------------------------------------------------------- */
 
   const dominantLock =
     buildDominantLock({
@@ -682,14 +1147,13 @@ export function buildDiagnosticContext(
       dominant_signals:
         dominantSignals,
 
-      raw_input:
-        combined,
-
       /*
-       * New context fields.
-       *
-       * Existing helper functions may safely ignore unknown keys.
+       * IMPORTANT:
+       * raw_input is evidence-only.
        */
+      raw_input:
+        userEvidenceText,
+
       negated_signals:
         extracted.negated_signals,
 
@@ -702,8 +1166,12 @@ export function buildDiagnosticContext(
 
   const behaviorReasoning =
     buildBehaviorReasoning({
+      /*
+       * Evidence only.
+       * No DriveShift question text enters behavior detection.
+       */
       raw_input:
-        combined,
+        userEvidenceText,
 
       extracted_signals:
         extracted.signals,
@@ -723,8 +1191,11 @@ export function buildDiagnosticContext(
 
   const mechanicalPrioritization =
     buildMechanicalPrioritization({
+      /*
+       * Evidence only.
+       */
       raw_input:
-        combined,
+        userEvidenceText,
 
       extracted_signals:
         extracted.signals,
@@ -762,14 +1233,34 @@ export function buildDiagnosticContext(
       CONTEXT_VERSION,
 
     /*
-     * Raw session evidence.
+     * BACKWARD-COMPATIBLE NAME:
+     *
+     * raw_input now means USER EVIDENCE ONLY.
      */
     raw_input:
-      combined,
+      userEvidenceText,
 
     /*
-     * Canonical signal extractor output.
+     * Explicit modern name.
      */
+    user_evidence_text:
+      userEvidenceText,
+
+    /*
+     * Full Q/A history for reasoning/display only.
+     *
+     * Never use this field for raw symptom, DTC, or live-data
+     * extraction.
+     */
+    interview_context:
+      interviewContext,
+
+    /*
+     * Traceable evidence records.
+     */
+    evidence_entries:
+      evidenceEntries,
+
     extracted_signals:
       extracted.signals,
 
@@ -786,20 +1277,10 @@ export function buildDiagnosticContext(
       extracted.behavior_relationships ||
       [],
 
-    /*
-     * Positive signal traceability.
-     */
     signal_evidence:
       extracted.signal_evidence ||
       {},
 
-    /*
-     * Negative observations are preserved explicitly.
-     *
-     * Example:
-     * "no smoke"
-     * must remain usable negative evidence.
-     */
     negated_signals:
       extracted.negated_signals ||
       {},
@@ -810,16 +1291,9 @@ export function buildDiagnosticContext(
         {}
       ),
 
-    /*
-     * Additional high-value phrases not represented as primary
-     * base signals.
-     */
     raw_evidence_flags:
       rawEvidence,
 
-    /*
-     * Human-readable diagnostic context.
-     */
     dominant_signals:
       dominantSignals,
 
@@ -827,9 +1301,6 @@ export function buildDiagnosticContext(
 
     readiness,
 
-    /*
-     * Existing reasoning layers.
-     */
     dominant_lock:
       dominantLock,
 
@@ -839,12 +1310,6 @@ export function buildDiagnosticContext(
     mechanical_prioritization:
       mechanicalPrioritization,
 
-    /*
-     * Conservative higher-order locks.
-     *
-     * These guide prioritization only.
-     * They do not confirm a component.
-     */
     ignition_fuel_dominance:
       locks.ignitionFuel,
 
@@ -883,7 +1348,6 @@ function buildDiagnosticLocks({
   return {
     ignitionFuel:
       buildIgnitionFuelDominance({
-        text,
         extracted,
         rawEvidence,
       }),
@@ -923,18 +1387,14 @@ function buildDiagnosticLocks({
    ============================================================ */
 
 function buildIgnitionFuelDominance({
-  text,
   extracted,
   rawEvidence,
 }) {
   const signals =
     extracted.signals || {};
 
-  let score =
-    0;
-
-  let independentEvidenceCount =
-    0;
+  let score = 0;
+  let independentEvidenceCount = 0;
 
   const evidence = {
     flashingCheckEngine:
@@ -976,68 +1436,50 @@ function buildIgnitionFuelDominance({
   if (
     evidence.flashingCheckEngine
   ) {
-    score +=
-      8;
-
+    score += 8;
     independentEvidenceCount++;
   }
 
   if (
     evidence.blackSmoke
   ) {
-    score +=
-      7;
-
+    score += 7;
     independentEvidenceCount++;
   }
 
   if (
     evidence.fuelSmell
   ) {
-    score +=
-      6;
-
+    score += 6;
     independentEvidenceCount++;
   }
 
   if (
     evidence.roughIdle
   ) {
-    score +=
-      3;
-
+    score += 3;
     independentEvidenceCount++;
   }
 
   if (
     evidence.accelerationIssue
   ) {
-    score +=
-      3;
-
+    score += 3;
     independentEvidenceCount++;
   }
 
   if (
     evidence.loadSensitive
   ) {
-    score +=
-      2;
+    score += 2;
   }
 
   if (
     evidence.heatRelated
   ) {
-    score +=
-      1;
+    score += 1;
   }
 
-  /*
-   * Require more than one meaningful observation.
-   *
-   * One symptom alone must not create an aggressive diagnostic
-   * lock.
-   */
   const locked =
     score >= 10 &&
     independentEvidenceCount >= 2;
@@ -1096,43 +1538,32 @@ function buildSmokeFuelDominance({
       ),
   };
 
-  let score =
-    0;
+  let score = 0;
 
   if (
     evidence.blackSmoke
   ) {
-    score +=
-      8;
+    score += 8;
   }
 
   if (
     evidence.fuelSmell
   ) {
-    score +=
-      6;
+    score += 6;
   }
 
   if (
     evidence.roughIdle
   ) {
-    score +=
-      2;
+    score += 2;
   }
 
   if (
     evidence.accelerationIssue
   ) {
-    score +=
-      2;
+    score += 2;
   }
 
-  /*
-   * Do not lock merely because generic smoke exists.
-   *
-   * White and blue smoke deliberately remain outside this
-   * rich-fuel lock.
-   */
   const hasPrimaryEvidence =
     evidence.blackSmoke ||
     evidence.fuelSmell;
@@ -1503,12 +1934,6 @@ function buildOverheatDominance({
    RAW HIGH-VALUE EVIDENCE
    ============================================================ */
 
-/*
- * These observations are useful but do not belong in the core
- * signal extractor's broad behavioral taxonomy.
- *
- * Matching is local-negation-aware.
- */
 function buildRawEvidenceFlags(
   text
 ) {
@@ -1659,8 +2084,7 @@ function buildDiagnosticConstraints({
   extracted,
   locks,
 }) {
-  const constraints =
-    [];
+  const constraints = [];
 
   if (
     locks.overheat.denied
@@ -1677,7 +2101,7 @@ function buildDiagnosticConstraints({
       ?.smoke
   ) {
     constraints.push(
-      "Smoke is explicitly denied in the supplied session and must remain negative evidence."
+      "Smoke is explicitly denied and must remain negative evidence."
     );
   }
 
@@ -1688,7 +2112,7 @@ function buildDiagnosticConstraints({
       ?.fuel_smell
   ) {
     constraints.push(
-      "Fuel odor is explicitly denied and must not be used as supporting evidence for a rich-fuel diagnosis."
+      "Fuel odor is explicitly denied and must not support a rich-fuel diagnosis."
     );
   }
 
@@ -1712,7 +2136,7 @@ function buildDiagnosticConstraints({
     locks.vibration.locked
   ) {
     constraints.push(
-      "Do not assign a vibration to wheel balance, mounts, axles, brakes, or driveline without matching the operating condition and vibration location."
+      "Do not assign vibration to wheel balance, mounts, axles, brakes, or driveline without matching operating condition and vibration location."
     );
   }
 
@@ -1720,7 +2144,7 @@ function buildDiagnosticConstraints({
     locks.brake.locked
   ) {
     constraints.push(
-      "Brake-related evidence is safety-sensitive; diagnostic ranking must preserve hydraulic and vehicle-control risk until ruled out."
+      "Brake-related evidence is safety-sensitive; preserve hydraulic and vehicle-control risk until ruled out."
     );
   }
 
@@ -1771,7 +2195,7 @@ function isSafetySensitive(
 }
 
 /* ============================================================
-   ADVANCED CASE DETECTION
+   ADVANCED CASE
    ============================================================ */
 
 function isAdvancedCase(
@@ -1836,13 +2260,6 @@ function isSimpleLowRisk(
    NEGATION-AWARE RAW PHRASE MATCHING
    ============================================================ */
 
-/*
- * This matcher is intentionally smaller than signal-extractor.js.
- *
- * It exists only for high-value phrases that are not part of the
- * base signal taxonomy.
- */
-
 function hasAffirmedAny(
   text,
   phrases
@@ -1906,19 +2323,15 @@ function phraseIsAffirmed(
       cleanClause
     );
 
-  if (
-    !match
-  ) {
+  if (!match) {
     return false;
   }
 
   /*
-   * The phrase itself may intentionally contain "no":
+   * Fault phrases intentionally beginning with "no":
    * - no communication
    * - no boost
-   *
-   * In that case the phrase describes the positive fault state
-   * and must not be treated as a negated observation.
+   * - no crank
    */
   if (
     cleanPhrase.startsWith(
@@ -1947,26 +2360,16 @@ function phraseIsAffirmed(
       )
       .trim();
 
-  if (
-    !before
-  ) {
+  if (!before) {
     return true;
   }
 
   const recentWords =
     before
-      .split(
-        /\s+/
-      )
-      .filter(
-        Boolean
-      )
-      .slice(
-        -5
-      )
-      .join(
-        " "
-      );
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(-5)
+      .join(" ");
 
   const negations = [
     "no",
@@ -2027,10 +2430,7 @@ function splitDiagnosticClauses(
     text || ""
   )
     .toLowerCase()
-    .replace(
-      /[’‘]/g,
-      "'"
-    )
+    .replace(/[’‘]/g, "'")
     .split(
       /\b(?:but|however|although|though|except|yet)\b|[.!?;,\n]/i
     )
@@ -2038,9 +2438,7 @@ function splitDiagnosticClauses(
       (clause) =>
         clause.trim()
     )
-    .filter(
-      Boolean
-    );
+    .filter(Boolean);
 }
 
 function normalizeForMatching(
@@ -2050,23 +2448,38 @@ function normalizeForMatching(
     value || ""
   )
     .toLowerCase()
-    .replace(
-      /[’‘]/g,
-      "'"
-    )
-    .replace(
-      /[–—]/g,
-      "-"
-    )
+    .replace(/[’‘]/g, "'")
+    .replace(/[–—]/g, "-")
     .replace(
       /[^a-z0-9'\s-]/g,
       " "
     )
-    .replace(
-      /\s+/g,
-      " "
-    )
+    .replace(/\s+/g, " ")
     .trim();
+}
+
+/* ============================================================
+   LEGACY METADATA FILTER
+   ============================================================ */
+
+function isLegacyMetadataQuestion(
+  question
+) {
+  const clean =
+    String(
+      question || ""
+    )
+      .toLowerCase()
+      .trim();
+
+  return (
+    clean.includes(
+      "vehicle profile"
+    ) ||
+    clean.includes(
+      "driveshift flow control"
+    )
+  );
 }
 
 /* ============================================================
@@ -2104,66 +2517,6 @@ export function clamp(
       value
     )
   );
-}
-
-/* ============================================================
-   SESSION TEXT
-   ============================================================ */
-
-function buildCombinedText(
-  issue,
-  answers
-) {
-  const parts = [
-    String(
-      issue || ""
-    ).trim(),
-  ];
-
-  if (
-    Array.isArray(
-      answers
-    )
-  ) {
-    for (
-      const item of answers
-    ) {
-      const question =
-        String(
-          item?.question || ""
-        ).trim();
-
-      const answer =
-        String(
-          item?.answer || ""
-        ).trim();
-
-      if (
-        question
-      ) {
-        parts.push(
-          `Question: ${question}`
-        );
-      }
-
-      if (
-        answer
-      ) {
-        parts.push(
-          `Answer: ${answer}`
-        );
-      }
-    }
-  }
-
-  return parts
-    .filter(
-      Boolean
-    )
-    .join(
-      "\n"
-    )
-    .toLowerCase();
 }
 
 /* ============================================================
