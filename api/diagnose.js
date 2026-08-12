@@ -10,6 +10,10 @@ import {
   buildObdInsight,
 } from "./helpers/obd-intelligence.js";
 
+import {
+  buildDiagnosticConfidence,
+} from "./helpers/confidence-engine.js";
+
 /* ============================================================
    DRIVESHIFT — ASK AI DIAGNOSTIC API
    ============================================================
