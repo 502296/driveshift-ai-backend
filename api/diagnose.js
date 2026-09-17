@@ -29,7 +29,7 @@ import {
    CONFIGURATION
    ============================================================ */
 
-const MAX_FOLLOW_UPS = 5;
+const MAX_FOLLOW_UPS = 3;
 
 const INTERVIEW_TIMEOUT_MS = 8_000;
 const REPORT_TIMEOUT_MS = 35_000;
