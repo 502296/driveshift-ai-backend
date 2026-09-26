@@ -1136,6 +1136,10 @@ const structuredObdCodes =
 
           obdInsight,
 
+          modelObdEvidence,
+
+          structuredObdCodes,
+
           answeredFollowUpCount,
         });
 
