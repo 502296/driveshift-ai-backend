@@ -1108,13 +1108,13 @@ const structuredObdCodes =
       );
 
     const obdInsight =
-      buildObdInsight({
-        code:
-          primaryObdCode
+  buildObdInsight({
+    code:
+      primaryObdCode,
 
-        liveData:
-          liveDataContext,
-      });
+    liveData:
+      liveDataContext,
+  });
 
     /* ========================================================
        INTERVIEW
