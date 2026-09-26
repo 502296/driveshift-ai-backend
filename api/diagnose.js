@@ -1097,6 +1097,11 @@ const structuredObdCodes =
         userEvidenceText,
       );
 
+    const primaryObdCode =
+  structuredObdCodes[0] ||
+  obdCodes[0] ||
+  "";
+
     const liveDataContext =
       parseLiveDataContext(
         userEvidenceText,
@@ -1105,7 +1110,7 @@ const structuredObdCodes =
     const obdInsight =
       buildObdInsight({
         code:
-          obdCodes[0] || "",
+          primaryObdCode
 
         liveData:
           liveDataContext,
