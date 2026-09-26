@@ -1007,6 +1007,21 @@ export default async function handler(
         req?.body?.vehicleProfile,
       );
 
+    const verifiedObdEvidence =
+  normalizeVerifiedObdEvidence(
+    req?.body?.obdEvidence,
+  );
+
+const modelObdEvidence =
+  buildVerifiedObdEvidenceForModel(
+    verifiedObdEvidence,
+  );
+
+const structuredObdCodes =
+  extractVerifiedObdCodes(
+    verifiedObdEvidence,
+  );
+
     if (!issue) {
       return res.status(200).json({
         status: "follow_up",
