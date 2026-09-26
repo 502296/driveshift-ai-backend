@@ -13,6 +13,12 @@ import {
   buildDiagnosticConfidence,
 } from "./helpers/confidence-engine.js";
 
+import {
+  normalizeVerifiedObdEvidence,
+  buildVerifiedObdEvidenceForModel,
+  extractVerifiedObdCodes,
+} from "./helpers/verified-obd-evidence.js";
+
 /* ============================================================
    DRIVESHIFT DIAGNOSTIC API — V2
 
