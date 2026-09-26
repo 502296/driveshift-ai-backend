@@ -1303,6 +1303,8 @@ async function requestInterviewDecision({
   askedQuestions,
   obdCodes,
   obdInsight,
+  modelObdEvidence,
+  structuredObdCodes,
   answeredFollowUpCount,
 }) {
   const evidenceRecords =
