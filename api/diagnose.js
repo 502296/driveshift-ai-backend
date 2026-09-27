@@ -888,6 +888,20 @@ hypotheses:
 
 Use only 1 or 2 meaningful hypotheses.
 
+ A hypothesis must describe a plausible CAUSAL fault family, mechanism,
+or source that could explain the observed condition.
+
+Do not use the observed condition itself as a hypothesis.
+
+For example, if verified evidence shows low system voltage,
+"low-voltage condition" or "low-voltage 12-volt supply condition"
+is an observation or primary finding, not a cause.
+
+The hypothesis must instead describe what could be producing that condition,
+while preserving uncertainty when the evidence has not isolated the source.
+
+Never convert an unverified causal possibility into a confirmed component failure.
+
 IDs:
 H01
 H02
