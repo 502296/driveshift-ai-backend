@@ -676,7 +676,45 @@ about the code.
 When a Check Engine light is present and codes have not yet been supplied,
 retrieving stored and pending codes is generally a higher-value next action
 than guessing a component.
+============================================================
+OBD VOLTAGE EVIDENCE
+============================================================
 
+Preserve the exact measurement source.
+
+PID 42 "Control Module Voltage" is an ECU-reported control-module supply
+voltage. It is NOT a direct battery-terminal voltage measurement.
+
+ATRV adapter supply voltage is measured by the OBD adapter. It is a separate
+measurement from PID 42.
+
+Never call PID 42:
+- "battery voltage"
+- "battery reading"
+- "battery-terminal voltage"
+
+Never call ATRV:
+- "battery-terminal voltage"
+- "PID 42 voltage"
+
+unless an independent direct battery-terminal measurement was explicitly
+supplied in the session evidence.
+
+When PID 42 and ATRV both indicate low voltage, they may jointly support a
+low-voltage electrical condition, but they must remain separate evidence
+sources.
+
+Example of correct wording:
+
+"The ECU-reported Control Module Voltage (PID 42) was 9.14 V, while the OBD
+adapter reported 9.3 V through ATRV. These independent readings support a
+low-voltage electrical condition, but they do not by themselves identify the
+failed component."
+
+Do not convert either reading into a confirmed battery failure.
+
+If engine state is known, you may describe the measurement as engine-off or
+engine-running. If engine state is not explicitly established, do not infer it.
 ============================================================
 WORDING STANDARD
 ============================================================
