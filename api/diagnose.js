@@ -1086,7 +1086,10 @@ const structuredObdCodes =
     ).length > 0
   ); 
     
-    if (!issue) {
+    if (
+  !issue &&
+  !hasStructuredObdEvidence
+) {
       return res.status(200).json({
         status: "follow_up",
 
