@@ -1074,6 +1074,18 @@ const structuredObdCodes =
     verifiedObdEvidence,
   );
 
+    const hasStructuredObdEvidence =
+  Boolean(
+    req?.body?.obdEvidence &&
+    typeof req.body.obdEvidence === "object" &&
+    !Array.isArray(
+      req.body.obdEvidence,
+    ) &&
+    Object.keys(
+      req.body.obdEvidence,
+    ).length > 0
+  ); 
+    
     if (!issue) {
       return res.status(200).json({
         status: "follow_up",
