@@ -1437,6 +1437,17 @@ UNVERIFIED or ERROR evidence must never be presented as a measured value.
 Do not merge adapter ATRV supply voltage with ECU Control Module Voltage PID 42.
 They are separate measurements from different sources.
 
+VOLTAGE NAMING RULE
+
+When citing verified voltage evidence:
+
+- PID 42 must be called "Control Module Voltage" or "ECU Control Module Voltage".
+- ATRV must be called "Adapter Supply Voltage".
+- Never rename PID 42 as "Battery", "Battery Voltage", or "Battery Reading".
+- Never rename ATRV as ECU voltage or battery-terminal voltage.
+- A direct battery-terminal voltage measurement exists only when explicitly supplied as such.
+- Do not claim that PID 42 or ATRV is a direct battery-terminal measurement.
+
 Preserve ECU provenance when it is supplied.
 
 A verified zero-code response applies only to the diagnostic service that
