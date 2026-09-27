@@ -1,608 +1,1382 @@
 // api/audio-diagnose.js
 
-const REQUIRED_AUDIO_FOLLOWUPS = 0;
-
-const TRANSCRIBE_MODEL = "gpt-4o-transcribe";
-const DIAGNOSIS_MODEL = "gpt-4o";
+const AUDIO_MODEL = process.env.OPENAI_AUDIO_MODEL || "gpt-audio";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ result: "Method not allowed" });
   }
 
+  const lang = req.body?.language === "es" ? "es" : "en";
+
   try {
     const {
       audio,
       audioFormat,
-      language,
       selectedSoundPattern,
       durationSeconds,
       vehicleProfile,
       audioFollowUpAnswers,
+      audioEvidence,
     } = req.body || {};
 
-    const lang = language === "es" ? "es" : "en";
-    const format = normalizeAudioFormat(audioFormat);
     const audioBase64 = String(audio || "").trim();
-    const duration = Number(durationSeconds || 0);
-    const answers = Array.isArray(audioFollowUpAnswers)
-      ? audioFollowUpAnswers
-      : [];
+    const format = normalizeAudioFormat(audioFormat);
+    const evidence = normalizeAudioEvidence(audioEvidence);
+
+    const soundFocus = resolveSoundFocus({
+      lang,
+      evidence,
+      selectedSoundPattern,
+    });
 
     if (!audioBase64 || audioBase64.length < 1000) {
-      return res.status(200).json({
-        result: buildNoAudioResponse(lang),
-      });
+      return sendDiagnosis(
+        res,
+        buildInsufficientResult({
+          lang,
+          soundFocus,
+          limitation:
+              lang === "es"
+                  ? "No se recibió una grabación utilizable."
+                  : "No usable audio recording was received.",
+          technicalDetails:
+              buildTechnicalDetails(
+            evidence,
+            lang,
+          ),
+        }),
+        lang,
+      );
     }
 
-    const mode =
-      answers.length < REQUIRED_AUDIO_FOLLOWUPS ? "follow_up" : "analysis";
+    if (!format) {
+      return sendDiagnosis(
+        res,
+        buildInsufficientResult({
+          lang,
+          soundFocus,
+          limitation:
+              lang === "es"
+                  ? "El análisis directo requiere audio WAV o MP3."
+                  : "Direct audio analysis requires WAV or MP3 audio.",
+          technicalDetails:
+              buildTechnicalDetails(
+            evidence,
+            lang,
+          ),
+        }),
+        lang,
+      );
+    }
 
-    const prompt = buildPrompt({
-      mode,
+    if (
+      evidence?.quality?.state ===
+      "unusable"
+    ) {
+      return sendDiagnosis(
+        res,
+        buildInsufficientResult({
+          lang,
+          soundFocus,
+          limitation:
+              lang === "es"
+                  ? "La validación local marcó la grabación como no utilizable para interpretación acústica."
+                  : "Local validation marked the recording as unusable for acoustic interpretation.",
+          technicalDetails:
+              buildTechnicalDetails(
+            evidence,
+            lang,
+          ),
+        }),
+        lang,
+      );
+    }
+
+    const prompt =
+        buildPrompt({
       lang,
-      selectedSoundPattern,
-      durationSeconds: duration,
+      soundFocus,
+      durationSeconds,
       vehicleProfile,
-      answers,
+      audioFollowUpAnswers,
+      evidence,
     });
 
-    const aiText = await requestAudioDiagnosis({
+    const raw =
+        await requestDirectAudioDiagnosis({
       prompt,
       audioBase64,
-      audioFormat: format,
-      lang,
-      selectedSoundPattern,
-      durationSeconds: duration,
+      format,
     });
 
-    const result = cleanAndFinalize({
-      text: aiText,
-      mode,
+    const diagnosis =
+        normalizeDiagnosis({
+      raw,
       lang,
+      soundFocus,
+      evidence,
     });
 
-    return res.status(200).json({ result });
+    return sendDiagnosis(
+      res,
+      diagnosis,
+      lang,
+    );
   } catch (error) {
-    console.log("AUDIO HANDLER ERROR:", error);
+    console.log(
+      "AUDIO HANDLER ERROR:",
+      error,
+    );
 
-    const lang = req.body?.language === "es" ? "es" : "en";
-    return res.status(200).json({
-      result: buildSafeErrorResponse(lang),
-    });
+    return sendDiagnosis(
+      res,
+      buildInsufficientResult({
+        lang,
+        soundFocus:
+            lang === "es"
+                ? "No confirmado"
+                : "Unconfirmed",
+        limitation:
+            lang === "es"
+                ? "El análisis de audio no pudo completarse de forma verificable."
+                : "The audio analysis could not be completed in a verifiable way.",
+      }),
+      lang,
+    );
   }
+}
+
+function sendDiagnosis(
+  res,
+  diagnosis,
+  lang,
+) {
+  return res.status(200).json({
+    diagnosis,
+    result:
+        buildLegacyResult(
+      diagnosis,
+      lang,
+    ),
+  });
 }
 
 function buildPrompt({
-  mode,
   lang,
-  selectedSoundPattern,
+  soundFocus,
   durationSeconds,
   vehicleProfile,
-  answers,
+  audioFollowUpAnswers,
+  evidence,
 }) {
-  const isEs = lang === "es";
-  const vehicleText = buildVehicleText(vehicleProfile);
-  const answerText = buildAnswersText(answers);
-
-  const outputFormat =
-    mode === "follow_up"
-      ? `
-Output exactly this format:
-
-Diagnosis status: audio_follow_up
-
-Voice summary:
-[one short mechanic sentence showing that you heard the recording]
-
-Audio direction:
-[short direction based on the sound and selected area]
-
-Question 1:
-[one confirmation question that helps verify the sound behavior]
-
-Answer options 1:
-[option 1]
-[option 2]
-[option 3]
-[option 4]
-
-Question 2:
-[one confirmation question that helps verify the sound character]
-
-Answer options 2:
-[option 1]
-[option 2]
-[option 3]
-[option 4]
-`
-      : `
-Output exactly this format:
-
-Diagnosis status: analysis
-
-Voice summary:
-[a calm mechanic-style observation in 2-3 sentences that reflects the recorded vehicle sound context and what an experienced technician would notice first]
-
-Likely issue:
-Most likely: [strongest cause]
-Secondary possibility: [second cause]
-Less likely: [third cause]
-
-Why it fits:
-[briefly explain in 2-4 sentences why the sound matches the listed possibilities. Avoid repeating information already stated in Voice Summary or Likely Issue.]
-
-What to inspect next:
-[list the first components and systems a technician should inspect to verify the cause. Keep the section concise.]
-
-What to do next:
-[give calm professional guidance about recommended inspection and maintenance steps without making driving safety judgments, risk ratings, or repair guarantees]
-
-Answer options:
-None
-`;
-
   return `
-You are DriveShift Doctor, a premium automotive sound diagnostic system.
+You are the diagnostic reasoning layer for DriveShift Audio Diagnostics.
 
-You are analyzing a real vehicle sound recording.
-Do not mention AI.
-Do not say the recording is unclear unless the audio is truly empty.
-Do not ask the user to record again unless the audio is missing.
-Do not produce generic advice.
-Do not recommend replacing parts immediately unless evidence is strong.
-Do not include risk level.
-Do not include driving safety judgment.
-Do not include "when to stop driving".
-Do not present the result as a confirmed repair order.
+LANGUAGE
+${lang === "es" ? "Spanish only." : "English only."}
 
-Important:
-If the audio transcription has little or no speech, that is normal.
-This is a vehicle sound scan, not a voice note.
-Use the selected sound source, recording duration, vehicle profile, and mechanical rules to infer the most likely sound direction.
+CAPTURE CONTEXT
+Sound focus: ${soundFocus}
+Recording duration: ${Number(durationSeconds || 0)} seconds
+Vehicle profile: ${safeJson(vehicleProfile)}
+Confirmed follow-up answers: ${safeJson(audioFollowUpAnswers)}
 
-Language:
-${isEs ? "Spanish only" : "English only"}
+VERIFIED AUDIO EVIDENCE
+${evidence ? safeJson(evidence) : "None supplied."}
 
-Mode:
-${mode}
+EVIDENCE CONTRACT
 
-Vehicle profile:
-${vehicleText}
+- The original audio is acoustic input, not automatic proof of a failed component.
+- Capture location only describes where the phone was placed.
+- Entries marked "measured" are measurements. Preserve their names, values, units, IDs, and meaning.
+- Entries marked "observed" are derived acoustic descriptions, not confirmed failures.
+- Never invent frequencies, dBFS values, clipping values, RPM correlation, speed correlation, measurements, or evidence IDs.
+- Never convert an acoustic measurement into a confirmed failed part.
+- Causes are hypotheses only.
+- supportingEvidenceIds may contain only IDs supplied in VERIFIED AUDIO EVIDENCE.
+- Do not use HIGH confidence merely because a location was selected.
+- If the evidence cannot support a responsible direction, return insufficient_evidence.
+- If one or two behavioral questions would materially separate plausible causes, return follow_up_required.
+- Do not recommend replacing a component from audio evidence alone.
+- Every cause must include a practical verification step.
 
-Recording duration:
-${durationSeconds || "Unknown"} seconds
+Return ONE JSON object only.
+No markdown.
+No code fences.
+No text before or after the JSON.
 
-Selected sound source / pattern:
-${selectedSoundPattern || "Not selected"}
+Use exactly this structure:
 
-Previous confirmation answers:
-${answerText || "None"}
+{
+  "status": "complete | follow_up_required | insufficient_evidence",
+  "soundFocus": "string",
+  "directionConfidence": "high | medium | low | unknown",
+  "diagnosticTitle": "string",
+  "diagnosticSummary": "string",
+  "causes": [
+    {
+      "title": "string",
+      "description": "string",
+      "confidence": "high | medium | low | unknown",
+      "supportingEvidenceIds": ["existing evidence IDs only"],
+      "verification": "string"
+    }
+  ],
+  "nextStepTitle": "string",
+  "nextStepBody": "string",
+  "doNotReplaceTitle": "string",
+  "doNotReplaceBody": "string",
+  "followUpQuestions": [
+    {
+      "question": "string",
+      "options": [
+        "option 1",
+        "option 2",
+        "option 3",
+        "option 4"
+      ]
+    }
+  ],
+  "limitations": ["string"]
+}
 
-Diagnostic rules:
-- If selected area is engine bay, prioritize RPM-linked engine, valvetrain, injector, lifter, belt, pulley, exhaust leak, or knock.
-- If selected area is wheel area, prioritize speed-linked wheel bearing, tire, hub, brake drag, CV axle, or suspension noise.
-- If selected area is under car or exhaust, prioritize exhaust leak, heat shield, flex pipe, catalytic converter shield, loose bracket, or driveline vibration.
-- If sound follows RPM, raise engine-side causes.
-- If sound follows vehicle speed, raise wheel/drivetrain causes.
-- If braking changes the sound, raise brake causes.
-- If sound is fast ticking from engine bay, raise injector tick, lifter tap, valve train tick, or small exhaust leak.
-- If sound is deep metallic knock from engine bay, raise internal knock, flexplate, pulley impact, or engine mount movement.
-- If sound is squeal/chirp, raise belt, tensioner, idler pulley, alternator pulley, or A/C pulley.
-- If sound is scraping/grinding, raise brake, dust shield, rotor/pad contact, pulley contact, or metal rubbing.
-
-Reasoning style:
-You are not a chatbot.
-You are a world-class diagnostic mechanic inside a premium scan system.
-Think mechanically.
-Prioritize real-world mechanical reasoning over generic advice.
-Do not overreact.
-Do not guess randomly.
-Keep reports concise.
-Avoid repeating the same reasoning across sections.
-Each section should add new information.
-Limit each section to practical technician-level observations.
-The report must feel calm, technical, trustworthy, and experience-driven.
-No markdown bullets.
-No confidence percentage.
-
-${outputFormat}
+Use 1-3 causes for complete results.
+Use no more than 2 follow-up questions.
+Keep the report concise, technical, calm, and evidence-driven.
 `;
 }
 
-async function requestAudioDiagnosis({
+async function requestDirectAudioDiagnosis({
   prompt,
   audioBase64,
-  audioFormat,
-  lang,
-  selectedSoundPattern,
-  durationSeconds,
+  format,
 }) {
-  try {
-    const audioBuffer = Buffer.from(audioBase64, "base64");
-    const mimeType = getAudioMimeType(audioFormat);
-    const extension = getAudioExtension(audioFormat);
-
-    console.log("DRIVESHIFT AUDIO INPUT:", {
-      audioFormat,
-      mimeType,
-      extension,
-      bytes: audioBuffer.length,
-      durationSeconds,
-      selectedSoundPattern,
-    });
-
-    const formData = new FormData();
-    const audioBlob = new Blob([audioBuffer], { type: mimeType });
-
-    formData.append("file", audioBlob, `driveshift-audio.${extension}`);
-    formData.append("model", TRANSCRIBE_MODEL);
-
-    if (lang === "en" || lang === "es") {
-      formData.append("language", lang);
-    }
-
-    formData.append(
-      "prompt",
-      "This is an automotive diagnostic recording. It may contain engine noise, ticking, knocking, belt squeal, wheel hum, brake scraping, exhaust rattle, vibration, or very little human speech."
-    );
-
-    const transcriptResponse = await fetch(
-      "https://api.openai.com/v1/audio/transcriptions",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        },
-        body: formData,
-      }
-    );
-
-    if (!transcriptResponse.ok) {
-      const errorText = await transcriptResponse.text();
-      console.log(
-        "OPENAI TRANSCRIBE ERROR:",
-        transcriptResponse.status,
-        errorText
-      );
-      return "";
-    }
-
-    const transcriptData = await transcriptResponse.json();
-    const transcript = String(transcriptData?.text || "").trim();
-
-    console.log("DRIVESHIFT AUDIO TRANSCRIPT:", transcript || "[no speech]");
-
-    const diagnosisResponse = await fetch(
-      "https://api.openai.com/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model: DIAGNOSIS_MODEL,
-          messages: [
-            {
-              role: "system",
-              content:
-                "You are DriveShift Doctor, a premium automotive diagnostic assistant. Give structured mechanic-style diagnostic reports only. Do not include risk levels, driving safety judgments, or confirmed repair orders.",
-            },
-            {
-              role: "user",
-              content: `${prompt}
-
-Audio processing result:
-The audio file was received and processed through the modern transcription pipeline.
-
-Important vehicle-sound note:
-This scan is mainly for mechanical sound diagnosis. The transcript may be empty or short because the recording may contain mostly vehicle noise rather than human speech.
-
-Transcript:
-${transcript || "No clear human speech was detected in the vehicle recording."}
-
-Use this information carefully:
-- Do not treat an empty transcript as a failed recording.
-- Use the selected sound source, vehicle profile, duration, and diagnostic rules.
-- If there is not enough exact acoustic detail, still produce a careful preliminary diagnostic report based on the selected area and mechanical reasoning.
-- Avoid saying the scan failed unless the audio was missing.
-- Do not include risk level.
-- Do not include when to stop driving.
-- Do not make driving safety judgments.`,
-            },
-          ],
-          temperature: 0.05,
-          max_tokens: 1100,
-        }),
-      }
-    );
-
-    if (!diagnosisResponse.ok) {
-      const errorText = await diagnosisResponse.text();
-      console.log(
-        "OPENAI DIAGNOSIS ERROR:",
-        diagnosisResponse.status,
-        errorText
-      );
-      return "";
-    }
-
-    const diagnosisData = await diagnosisResponse.json();
-    console.log(
-      "OPENAI DIAGNOSIS RESPONSE:",
-      JSON.stringify(diagnosisData, null, 2)
-    );
-
-    return diagnosisData?.choices?.[0]?.message?.content || "";
-  } catch (error) {
-    console.log("OPENAI AUDIO MODERN PIPELINE FAILED:", error);
-    return "";
-  }
-}
-
-function cleanAndFinalize({ text, mode, lang }) {
-  let clean = String(text || "").trim();
-
-  if (!clean || clean.length < 40) {
-    if (mode === "follow_up") {
-      return buildEmergencyFollowUp(lang);
-    }
-
-    return buildSafeErrorResponse(lang);
-  }
-
-  clean = clean
-    .replace(/\*\*/g, "")
-    .replace(/`/g, "")
-    .replace(/Confidence:\s*[\s\S]*?(?=\n[A-Z][A-Za-z ]+:|$)/gi, "")
-    .replace(/Risk level:\s*[\s\S]*?(?=\n[A-Z][A-Za-z ]+:|$)/gi, "")
-    .replace(/When to stop driving:\s*[\s\S]*$/gi, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-
-  if (mode === "follow_up") {
-    clean = clean.replace(
-      /Diagnosis status:\s*(follow_up|analysis|final|audio_follow_up)/i,
-      "Diagnosis status: audio_follow_up"
-    );
-
-    if (!/Diagnosis status:\s*audio_follow_up/i.test(clean)) {
-      clean = `Diagnosis status: audio_follow_up\n\n${clean}`;
-    }
-
-    return clean.trim();
-  }
-
-  clean = clean.replace(
-    /Diagnosis status:\s*(follow_up|audio_follow_up|final|analysis)/i,
-    "Diagnosis status: analysis"
+  const response =
+      await fetch(
+    "https://api.openai.com/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type":
+            "application/json",
+        Authorization:
+            `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: AUDIO_MODEL,
+        messages: [
+          {
+            role: "system",
+            content:
+                "You are DriveShift's evidence-constrained automotive audio diagnostic engine. Separate measured evidence, acoustic observations, hypotheses, and verification. Never invent measurements or confirmed failures.",
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: prompt,
+              },
+              {
+                type:
+                    "input_audio",
+                input_audio: {
+                  data:
+                      audioBase64,
+                  format,
+                },
+              },
+            ],
+          },
+        ],
+        temperature:
+            0.05,
+        max_tokens:
+            1600,
+      }),
+    },
   );
 
-  if (!/Diagnosis status:/i.test(clean)) {
-    clean = `Diagnosis status: analysis\n\n${clean}`;
+  if (!response.ok) {
+    const errorText =
+        await response.text();
+
+    console.log(
+      "OPENAI DIRECT AUDIO ERROR:",
+      response.status,
+      errorText,
+    );
+
+    throw new Error(
+      `Direct audio request failed: ${response.status}`,
+    );
   }
 
-  if (/Answer options:/i.test(clean)) {
-    clean = clean.replace(/Answer options:\s*[\s\S]*$/i, "Answer options:\nNone");
-  } else {
-    clean += "\n\nAnswer options:\nNone";
+  const data =
+      await response.json();
+
+  const content =
+      data?.choices?.[0]?.message?.content;
+
+  const text =
+      typeof content === "string"
+          ? content.trim()
+          : "";
+
+  if (!text) {
+    throw new Error(
+      "Direct audio response was empty.",
+    );
   }
+
+  return parseJsonObject(
+    text,
+  );
+}
+
+function normalizeDiagnosis({
+  raw,
+  lang,
+  soundFocus,
+  evidence,
+}) {
+  const allowedIds =
+      collectEvidenceIds(
+    evidence,
+  );
+
+  let status =
+      normalizeStatus(
+    raw?.status,
+  );
+
+  const causes =
+      Array.isArray(
+        raw?.causes,
+      )
+          ? raw.causes
+              .slice(0, 3)
+              .map((item) => ({
+                title:
+                    cleanText(
+                  item?.title,
+                  180,
+                ),
+                description:
+                    cleanText(
+                  item?.description,
+                  500,
+                ),
+                confidence:
+                    normalizeConfidence(
+                  item?.confidence,
+                ),
+                supportingEvidenceIds:
+                    normalizeStringArray(
+                  item?.supportingEvidenceIds,
+                  12,
+                ).filter(
+                  (id) =>
+                      allowedIds.has(
+                    id,
+                  ),
+                ),
+                verification:
+                    cleanText(
+                  item?.verification,
+                  500,
+                ),
+              }))
+              .filter(
+                (item) =>
+                    item.title,
+              )
+          : [];
+
+  const followUpQuestions =
+      Array.isArray(
+        raw?.followUpQuestions,
+      )
+          ? raw.followUpQuestions
+              .slice(0, 2)
+              .map(
+                (item) => ({
+                  question:
+                      cleanText(
+                    item?.question,
+                    260,
+                  ),
+                  options:
+                      normalizeStringArray(
+                    item?.options,
+                    4,
+                  ),
+                }),
+              )
+              .filter(
+                (item) =>
+                    item.question &&
+                    item.options.length >=
+                        2,
+              )
+          : [];
+
+  const limitations =
+      normalizeStringArray(
+    raw?.limitations,
+    6,
+  );
+
+  if (
+    status === "complete" &&
+    causes.length === 0
+  ) {
+    status =
+        "insufficient_evidence";
+  }
+
+  if (
+    status ===
+        "follow_up_required" &&
+    followUpQuestions.length === 0
+  ) {
+    status =
+        "insufficient_evidence";
+  }
+
+  return {
+    status,
+
+    soundFocus,
+
+    directionConfidence:
+        normalizeConfidence(
+      raw?.directionConfidence,
+    ),
+
+    diagnosticTitle:
+        cleanText(
+          raw?.diagnosticTitle,
+          180,
+        ) ||
+        defaultTitle(
+          status,
+          lang,
+        ),
+
+    diagnosticSummary:
+        cleanText(
+          raw?.diagnosticSummary,
+          700,
+        ) ||
+        defaultSummary(
+          status,
+          lang,
+        ),
+
+    causes:
+        status === "complete"
+            ? causes
+            : [],
+
+    nextStepTitle:
+        cleanText(
+          raw?.nextStepTitle,
+          180,
+        ) ||
+        (
+          lang === "es"
+              ? "Verificar antes de reemplazar"
+              : "Verify before replacing"
+        ),
+
+    nextStepBody:
+        cleanText(
+          raw?.nextStepBody,
+          700,
+        ) ||
+        (
+          lang === "es"
+              ? "Realiza una comprobación dirigida antes de reemplazar piezas."
+              : "Perform a targeted verification before replacing parts."
+        ),
+
+    doNotReplaceTitle:
+        cleanText(
+          raw?.doNotReplaceTitle,
+          180,
+        ) ||
+        (
+          lang === "es"
+              ? "Ningún componente está confirmado todavía"
+              : "No component is confirmed failed yet"
+        ),
+
+    doNotReplaceBody:
+        cleanText(
+          raw?.doNotReplaceBody,
+          700,
+        ) ||
+        (
+          lang === "es"
+              ? "El audio puede orientar el diagnóstico, pero no confirma por sí solo una pieza defectuosa."
+              : "Audio can guide diagnosis, but it does not by itself confirm a failed part."
+        ),
+
+    technicalDetails:
+        buildTechnicalDetails(
+      evidence,
+      lang,
+    ),
+
+    followUpQuestions:
+        status ===
+                "follow_up_required"
+            ? followUpQuestions
+            : [],
+
+    limitations,
+  };
+}
+
+function normalizeAudioEvidence(
+  value,
+) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value)
+  ) {
+    return null;
+  }
+
+  const recording =
+      value.recording || {};
+
+  const quality =
+      value.quality || {};
+
+  return {
+    recording: {
+      sourceZone:
+          cleanText(
+        recording.sourceZone,
+        80,
+      ),
+      durationMilliseconds:
+          normalizeNumber(
+        recording.durationMilliseconds,
+      ),
+      sampleRateHz:
+          normalizeNumber(
+        recording.sampleRateHz,
+      ),
+      channelCount:
+          normalizeNumber(
+        recording.channelCount,
+      ),
+      format:
+          cleanText(
+        recording.format,
+        30,
+      ),
+    },
+
+    quality: {
+      state:
+          normalizeQualityState(
+        quality.state,
+      ),
+      signalLevel:
+          normalizeNumber(
+        quality.signalLevel,
+      ),
+      clippingRatio:
+          normalizeNumber(
+        quality.clippingRatio,
+      ),
+      noiseRatio:
+          normalizeNumber(
+        quality.noiseRatio,
+      ),
+      limitations:
+          normalizeStringArray(
+        quality.limitations,
+        10,
+      ),
+    },
+
+    signals:
+        Array.isArray(
+          value.signals,
+        )
+            ? value.signals
+                .slice(0, 32)
+                .map(
+                  (item) => ({
+                    id:
+                        cleanText(
+                      item?.id,
+                      100,
+                    ),
+                    name:
+                        cleanText(
+                      item?.name,
+                      160,
+                    ),
+                    numericValue:
+                        normalizeNumber(
+                      item?.numericValue,
+                    ),
+                    displayValue:
+                        cleanText(
+                      item?.displayValue,
+                      160,
+                    ),
+                    unit:
+                        cleanText(
+                      item?.unit,
+                      40,
+                    ),
+                    status:
+                        normalizeEvidenceStatus(
+                      item?.status,
+                    ),
+                    source:
+                        cleanText(
+                      item?.source,
+                      120,
+                    ),
+                  }),
+                )
+            : [],
+
+    observations:
+        Array.isArray(
+          value.observations,
+        )
+            ? value.observations
+                .slice(0, 32)
+                .map(
+                  (item) => ({
+                    id:
+                        cleanText(
+                      item?.id,
+                      100,
+                    ),
+                    label:
+                        cleanText(
+                      item?.label,
+                      180,
+                    ),
+                    description:
+                        cleanText(
+                      item?.description,
+                      500,
+                    ),
+                    status:
+                        normalizeEvidenceStatus(
+                      item?.status,
+                    ),
+                    supportingSignalIds:
+                        normalizeStringArray(
+                      item?.supportingSignalIds,
+                      16,
+                    ),
+                  }),
+                )
+            : [],
+
+    capturedAt:
+        cleanText(
+      value.capturedAt,
+      80,
+    ),
+  };
+}
+
+function buildTechnicalDetails(
+  evidence,
+  lang,
+) {
+  if (!evidence) {
+    return [];
+  }
+
+  const details =
+      [];
+
+  if (
+    evidence.quality?.state
+  ) {
+    details.push({
+      label:
+          lang === "es"
+              ? "Calidad de grabación"
+              : "Recording quality",
+      value:
+          evidence.quality.state,
+    });
+  }
+
+  for (
+    const signal
+    of evidence.signals || []
+  ) {
+    if (
+      signal.status !==
+      "measured"
+    ) {
+      continue;
+    }
+
+    if (
+      !signal.name ||
+      !signal.displayValue
+    ) {
+      continue;
+    }
+
+    details.push({
+      label:
+          signal.name,
+      value:
+          signal.displayValue,
+    });
+  }
+
+  return details.slice(
+    0,
+    12,
+  );
+}
+
+function collectEvidenceIds(
+  evidence,
+) {
+  const ids =
+      new Set();
+
+  for (
+    const item
+    of evidence?.signals || []
+  ) {
+    if (item.id) {
+      ids.add(item.id);
+    }
+  }
+
+  for (
+    const item
+    of evidence?.observations || []
+  ) {
+    if (item.id) {
+      ids.add(item.id);
+    }
+  }
+
+  return ids;
+}
+
+function resolveSoundFocus({
+  lang,
+  evidence,
+  selectedSoundPattern,
+}) {
+  const zone =
+      String(
+        evidence
+            ?.recording
+            ?.sourceZone ||
+            "",
+      ).toLowerCase();
+
+  if (
+    zone === "enginebay"
+  ) {
+    return lang === "es"
+        ? "Área del motor"
+        : "Engine bay";
+  }
+
+  if (
+    zone === "wheelarea"
+  ) {
+    return lang === "es"
+        ? "Área de rueda"
+        : "Wheel area";
+  }
+
+  if (
+    zone ===
+    "undervehicleexhaust"
+  ) {
+    return lang === "es"
+        ? "Debajo / escape"
+        : "Under vehicle / exhaust";
+  }
+
+  const legacy =
+      String(
+        selectedSoundPattern ||
+            "",
+      ).toLowerCase();
+
+  if (
+    legacy.includes(
+      "engine",
+    ) ||
+    legacy.includes(
+      "motor",
+    )
+  ) {
+    return lang === "es"
+        ? "Área del motor"
+        : "Engine bay";
+  }
+
+  if (
+    legacy.includes(
+      "wheel",
+    ) ||
+    legacy.includes(
+      "rueda",
+    )
+  ) {
+    return lang === "es"
+        ? "Área de rueda"
+        : "Wheel area";
+  }
+
+  if (
+    legacy.includes(
+      "under",
+    ) ||
+    legacy.includes(
+      "exhaust",
+    ) ||
+    legacy.includes(
+      "debajo",
+    ) ||
+    legacy.includes(
+      "escape",
+    )
+  ) {
+    return lang === "es"
+        ? "Debajo / escape"
+        : "Under vehicle / exhaust";
+  }
+
+  return lang === "es"
+      ? "No confirmado"
+      : "Unconfirmed";
+}
+
+function buildInsufficientResult({
+  lang,
+  soundFocus,
+  limitation,
+  technicalDetails = [],
+}) {
+  return {
+    status:
+        "insufficient_evidence",
+
+    soundFocus,
+
+    directionConfidence:
+        "unknown",
+
+    diagnosticTitle:
+        lang === "es"
+            ? "Se necesita más evidencia de audio"
+            : "More audio evidence is needed",
+
+    diagnosticSummary:
+        lang === "es"
+            ? "La evidencia disponible no permite una dirección diagnóstica responsable sin adivinar."
+            : "The available evidence does not support a responsible diagnostic direction without guessing.",
+
+    causes: [],
+
+    nextStepTitle:
+        lang === "es"
+            ? "Verificar antes de reemplazar"
+            : "Verify before replacing",
+
+    nextStepBody:
+        lang === "es"
+            ? "Repite o complementa la comprobación con una condición de funcionamiento que ayude a confirmar el origen."
+            : "Repeat or supplement the check under an operating condition that can help confirm the source.",
+
+    doNotReplaceTitle:
+        lang === "es"
+            ? "Ningún componente está confirmado todavía"
+            : "No component is confirmed failed yet",
+
+    doNotReplaceBody:
+        lang === "es"
+            ? "No reemplaces piezas basándote únicamente en esta grabación."
+            : "Do not replace parts based on this recording alone.",
+
+    technicalDetails,
+
+    followUpQuestions: [],
+
+    limitations:
+        limitation
+            ? [limitation]
+            : [],
+  };
+}
+
+function buildLegacyResult(
+  diagnosis,
+  lang,
+) {
+  if (
+    diagnosis.status ===
+    "follow_up_required"
+  ) {
+    const lines = [
+      "Diagnosis status: audio_follow_up",
+      "",
+      "Voice summary:",
+      diagnosis.diagnosticSummary,
+      "",
+      "Audio direction:",
+      diagnosis.diagnosticTitle,
+    ];
+
+    diagnosis
+        .followUpQuestions
+        .forEach(
+          (item, index) => {
+            const n =
+                index + 1;
+
+            lines.push(
+              "",
+              `Question ${n}:`,
+              item.question,
+              "",
+              `Answer options ${n}:`,
+              ...item.options,
+            );
+          },
+        );
+
+    return lines.join(
+      "\n",
+    );
+  }
+
+  const causes =
+      diagnosis.causes.length > 0
+          ? diagnosis.causes
+          : [
+              {
+                title:
+                    lang === "es"
+                        ? "Evidencia insuficiente"
+                        : "Insufficient evidence",
+                description:
+                    diagnosis
+                        .diagnosticSummary,
+                verification:
+                    diagnosis
+                        .nextStepBody,
+              },
+            ];
+
+  return `Diagnosis status: analysis
+
+Voice summary:
+${diagnosis.diagnosticSummary}
+
+Likely issue:
+Most likely: ${causes[0]?.title || "Unconfirmed"}
+Secondary possibility: ${causes[1]?.title || "Unconfirmed"}
+Less likely: ${causes[2]?.title || "Unconfirmed"}
+
+Why it fits:
+${causes.map((item) => item.description).filter(Boolean).join(" ")}
+
+What to inspect next:
+${causes.map((item) => item.verification).filter(Boolean).join(" ")}
+
+What to do next:
+${diagnosis.nextStepBody}
+
+Answer options:
+None`;
+}
+
+function normalizeAudioFormat(
+  format,
+) {
+  const value =
+      String(
+        format || "",
+      )
+          .trim()
+          .toLowerCase();
+
+  if (
+    value.includes(
+      "wav",
+    )
+  ) {
+    return "wav";
+  }
+
+  if (
+    value.includes(
+      "mp3",
+    ) ||
+    value.includes(
+      "mpeg",
+    )
+  ) {
+    return "mp3";
+  }
+
+  return null;
+}
+
+function normalizeStatus(
+  value,
+) {
+  const status =
+      String(
+        value || "",
+      )
+          .trim()
+          .toLowerCase();
+
+  if (
+    status ===
+    "complete"
+  ) {
+    return "complete";
+  }
+
+  if (
+    status ===
+    "follow_up_required"
+  ) {
+    return "follow_up_required";
+  }
+
+  return "insufficient_evidence";
+}
+
+function normalizeConfidence(
+  value,
+) {
+  const confidence =
+      String(
+        value || "",
+      )
+          .trim()
+          .toLowerCase();
+
+  if (
+    confidence ===
+    "high"
+  ) {
+    return "high";
+  }
+
+  if (
+    confidence ===
+        "medium" ||
+    confidence ===
+        "moderate"
+  ) {
+    return "medium";
+  }
+
+  if (
+    confidence ===
+    "low"
+  ) {
+    return "low";
+  }
+
+  return "unknown";
+}
+
+function normalizeEvidenceStatus(
+  value,
+) {
+  const status =
+      String(
+        value || "",
+      )
+          .trim()
+          .toLowerCase();
+
+  if (
+    status ===
+    "measured"
+  ) {
+    return "measured";
+  }
+
+  if (
+    status ===
+    "observed"
+  ) {
+    return "observed";
+  }
+
+  if (
+    status ===
+    "inferred"
+  ) {
+    return "inferred";
+  }
+
+  return "unverified";
+}
+
+function normalizeQualityState(
+  value,
+) {
+  const state =
+      String(
+        value || "",
+      )
+          .trim()
+          .toLowerCase();
+
+  if (
+    state === "usable"
+  ) {
+    return "usable";
+  }
+
+  if (
+    state === "marginal"
+  ) {
+    return "marginal";
+  }
+
+  if (
+    state === "unusable"
+  ) {
+    return "unusable";
+  }
+
+  return "unknown";
+}
+
+function normalizeStringArray(
+  value,
+  maxItems,
+) {
+  if (
+    !Array.isArray(
+      value,
+    )
+  ) {
+    return [];
+  }
+
+  return value
+      .slice(
+        0,
+        maxItems,
+      )
+      .map(
+        (item) =>
+            cleanText(
+          item,
+          400,
+        ),
+      )
+      .filter(Boolean);
+}
+
+function normalizeNumber(
+  value,
+) {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
+    return null;
+  }
+
+  const number =
+      Number(value);
+
+  return Number.isFinite(
+    number,
+  )
+      ? number
+      : null;
+}
+
+function cleanText(
+  value,
+  maxLength,
+) {
+  return String(
+    value ?? "",
+  )
+      .replace(
+        /\s+/g,
+        " ",
+      )
+      .trim()
+      .slice(
+        0,
+        maxLength,
+      );
+}
+
+function parseJsonObject(
+  text,
+) {
+  let clean =
+      String(
+        text || "",
+      ).trim();
 
   clean = clean
-    .replace(/Risk level:\s*[\s\S]*?(?=\n[A-Z][A-Za-z ]+:|$)/gi, "")
-    .replace(/When to stop driving:\s*[\s\S]*$/gi, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+      .replace(
+        /^```(?:json)?\s*/i,
+        "",
+      )
+      .replace(
+        /\s*```$/i,
+        "",
+      )
+      .trim();
 
-  return clean;
-}
+  try {
+    const parsed =
+        JSON.parse(
+      clean,
+    );
 
-function normalizeAudioFormat(format) {
-  const f = String(format || "").toLowerCase().trim();
+    if (
+      parsed &&
+      typeof parsed ===
+          "object" &&
+      !Array.isArray(
+        parsed,
+      )
+    ) {
+      return parsed;
+    }
+  } catch (_) {}
 
-  if (f.includes("wav")) return "wav";
-  if (f.includes("mp3") || f.includes("mpeg")) return "mp3";
-  if (f.includes("m4a") || f.includes("mp4")) return "m4a";
-  if (f.includes("webm")) return "webm";
+  const start =
+      clean.indexOf(
+    "{",
+  );
 
-  return "wav";
-}
+  const end =
+      clean.lastIndexOf(
+    "}",
+  );
 
-function getAudioMimeType(format) {
-  const f = normalizeAudioFormat(format);
+  if (
+    start !== -1 &&
+    end > start
+  ) {
+    const parsed =
+        JSON.parse(
+      clean.slice(
+        start,
+        end + 1,
+      ),
+    );
 
-  if (f === "mp3") return "audio/mpeg";
-  if (f === "m4a") return "audio/mp4";
-  if (f === "webm") return "audio/webm";
-
-  return "audio/wav";
-}
-
-function getAudioExtension(format) {
-  const f = normalizeAudioFormat(format);
-
-  if (f === "mp3") return "mp3";
-  if (f === "m4a") return "m4a";
-  if (f === "webm") return "webm";
-
-  return "wav";
-}
-
-function buildVehicleText(profile) {
-  if (!profile || typeof profile !== "object") return "Unknown vehicle.";
-
-  const parts = [];
-
-  if (profile.year) parts.push(`Year: ${profile.year}`);
-  if (profile.make) parts.push(`Make: ${profile.make}`);
-  if (profile.model) parts.push(`Model: ${profile.model}`);
-  if (profile.engine) parts.push(`Engine: ${profile.engine}`);
-  if (profile.mileage) parts.push(`Mileage: ${profile.mileage}`);
-
-  return parts.length ? parts.join(", ") : "Unknown vehicle.";
-}
-
-function buildAnswersText(answers) {
-  if (!Array.isArray(answers) || !answers.length) return "";
-
-  return answers
-    .map((item, index) => {
-      const q = String(item?.question || `Question ${index + 1}`).trim();
-      const a = String(item?.answer || "").trim();
-      return `${index + 1}. ${q}: ${a}`;
-    })
-    .join("\n");
-}
-
-function buildEmergencyFollowUp(lang) {
-  if (lang === "es") {
-    return `Diagnosis status: audio_follow_up
-
-Voice summary:
-Escuché el sonido del vehículo y voy a confirmar dos detalles para cerrar el diagnóstico.
-
-Audio direction:
-Engine-side sound behavior needs confirmation.
-
-Question 1:
-¿El sonido cambia más con RPM o con movimiento del vehículo?
-
-Answer options 1:
-RPM
-Velocidad
-Freno
-Giro
-
-Question 2:
-¿Qué carácter se parece más al sonido grabado?
-
-Answer options 2:
-Tick rápido
-Golpe profundo
-Chirrido
-Rattle metálico`;
+    if (
+      parsed &&
+      typeof parsed ===
+          "object" &&
+      !Array.isArray(
+        parsed,
+      )
+    ) {
+      return parsed;
+    }
   }
 
-  return `Diagnosis status: audio_follow_up
-
-Voice summary:
-I heard the vehicle sound and need two quick confirmations before the final diagnosis.
-
-Audio direction:
-Engine-side sound behavior needs confirmation.
-
-Question 1:
-Does the sound change more with RPM or vehicle movement?
-
-Answer options 1:
-RPM
-Speed
-Braking
-Turning
-
-Question 2:
-Which character best matches the recorded sound?
-
-Answer options 2:
-Fast ticking
-Deep knock
-Belt squeal
-Metallic rattle`;
+  throw new Error(
+    "Audio model did not return valid JSON.",
+  );
 }
 
-function buildNoAudioResponse(lang) {
-  if (lang === "es") {
-    return `Diagnosis status: analysis
-
-Voice summary:
-No recibí una grabación útil para analizar el sonido.
-
-Likely issue:
-Most likely: Audio recording was missing or too short
-Secondary possibility: Microphone permission or upload issue
-Less likely: Confirmed mechanical diagnosis from this recording
-
-Why it fits:
-The uploaded audio was not long enough or strong enough to support a useful sound-based assessment.
-
-What to inspect next:
-Check microphone permission, make sure the phone is close to the selected sound source, and record 7 to 10 seconds with no talking in the background.
-
-What to do next:
-Try the audio scan again with a clearer recording near the sound source.
-
-Answer options:
-None`;
+function safeJson(
+  value,
+) {
+  try {
+    return JSON.stringify(
+      value ?? null,
+    );
+  } catch (_) {
+    return "null";
   }
-
-  return `Diagnosis status: analysis
-
-Voice summary:
-I did not receive a usable recording to analyze the sound.
-
-Likely issue:
-Most likely: Audio recording was missing or too short
-Secondary possibility: Microphone permission or upload issue
-Less likely: Confirmed mechanical diagnosis from this recording
-
-Why it fits:
-The uploaded audio was not long enough or strong enough to support a useful sound-based assessment.
-
-What to inspect next:
-Check microphone permission, make sure the phone is close to the selected sound source, and record 7 to 10 seconds with no talking in the background.
-
-What to do next:
-Try the audio scan again with a clearer recording near the sound source.
-
-Answer options:
-None`;
 }
 
-function buildSafeErrorResponse(lang) {
-  if (lang === "es") {
-    return `Diagnosis status: analysis
-
-Voice summary:
-The sound was received, but the final audio analysis did not complete.
-
-Likely issue:
-Most likely: Audio analysis connection issue
-Secondary possibility: Unsupported audio format
-Less likely: Confirmed mechanical diagnosis from this attempt
-
-Why it fits:
-The recording reached the backend, but the diagnostic response did not complete.
-
-What to inspect next:
-Check the selected sound area and recording format, then try one more scan with 7 to 10 seconds near the sound source.
-
-What to do next:
-Repeat the scan once. If the issue continues, save the recording and have a qualified technician inspect the sound source directly.
-
-Answer options:
-None`;
+function defaultTitle(
+  status,
+  lang,
+) {
+  if (
+    status ===
+    "follow_up_required"
+  ) {
+    return lang === "es"
+        ? "Se necesita una confirmación rápida"
+        : "A quick confirmation is needed";
   }
 
-  return `Diagnosis status: analysis
+  if (
+    status ===
+    "complete"
+  ) {
+    return lang === "es"
+        ? "Dirección diagnóstica de audio"
+        : "Audio diagnostic direction";
+  }
 
-Voice summary:
-The sound was received, but the final audio analysis did not complete.
+  return lang === "es"
+      ? "Evidencia de audio insuficiente"
+      : "Insufficient audio evidence";
+}
 
-Likely issue:
-Most likely: Audio analysis connection issue
-Secondary possibility: Unsupported audio format
-Less likely: Confirmed mechanical diagnosis from this attempt
+function defaultSummary(
+  status,
+  lang,
+) {
+  if (
+    status ===
+    "follow_up_required"
+  ) {
+    return lang === "es"
+        ? "La grabación aporta información útil, pero una respuesta adicional ayudaría a separar las causas plausibles."
+        : "The recording provides useful information, but one additional answer would help separate plausible causes.";
+  }
 
-Why it fits:
-The recording reached the backend, but the diagnostic response did not complete.
+  if (
+    status ===
+    "complete"
+  ) {
+    return lang === "es"
+        ? "La evidencia permite una dirección diagnóstica preliminar que todavía requiere verificación física."
+        : "The evidence supports a preliminary diagnostic direction that still requires physical verification.";
+  }
 
-What to inspect next:
-Check the selected sound area and recording format, then try one more scan with 7 to 10 seconds near the sound source.
-
-What to do next:
-Repeat the scan once. If the issue continues, save the recording and have a qualified technician inspect the sound source directly.
-
-Answer options:
-None`;
+  return lang === "es"
+      ? "La evidencia disponible no permite una conclusión responsable sin más verificación."
+      : "The available evidence does not support a responsible conclusion without further verification.";
 }
