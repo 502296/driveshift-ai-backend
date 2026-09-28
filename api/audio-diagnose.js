@@ -1,13 +1,29 @@
 // api/audio-diagnose.js
 
-const AUDIO_MODEL = process.env.OPENAI_AUDIO_MODEL || "gpt-audio";
+const AUDIO_MODEL =
+  process.env.OPENAI_AUDIO_MODEL ||
+  "gpt-audio";
+
+const HARMONIC_SOURCE_ID =
+  "audio_fft_harmonic_analysis_v1";
+
+const HARMONIC_FUNDAMENTAL_ID =
+  "HARM_ESTIMATED_FUNDAMENTAL_HZ";
+
+const HARMONICITY_ID =
+  "HARM_HARMONICITY_SCORE";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
-    return res.status(405).json({ result: "Method not allowed" });
+    return res.status(405).json({
+      result: "Method not allowed",
+    });
   }
 
-  const lang = req.body?.language === "es" ? "es" : "en";
+  const lang =
+    req.body?.language === "es"
+      ? "es"
+      : "en";
 
   try {
     const {
@@ -20,31 +36,50 @@ export default async function handler(req, res) {
       audioEvidence,
     } = req.body || {};
 
-    const audioBase64 = String(audio || "").trim();
-    const format = normalizeAudioFormat(audioFormat);
-    const evidence = normalizeAudioEvidence(audioEvidence);
+    const audioBase64 =
+      String(audio || "").trim();
 
-    const soundFocus = resolveSoundFocus({
-      lang,
-      evidence,
-      selectedSoundPattern,
-    });
+    const format =
+      normalizeAudioFormat(
+        audioFormat,
+      );
 
-    if (!audioBase64 || audioBase64.length < 1000) {
+    /*
+     * Normalize and validate every evidence layer
+     * before it reaches diagnostic reasoning.
+     */
+    const evidence =
+      normalizeAudioEvidence(
+        audioEvidence,
+      );
+
+    const soundFocus =
+      resolveSoundFocus({
+        lang,
+        evidence,
+        selectedSoundPattern,
+      });
+
+    if (
+      !audioBase64 ||
+      audioBase64.length < 1000
+    ) {
       return sendDiagnosis(
         res,
         buildInsufficientResult({
           lang,
           soundFocus,
+
           limitation:
-              lang === "es"
-                  ? "No se recibió una grabación utilizable."
-                  : "No usable audio recording was received.",
+            lang === "es"
+              ? "No se recibió una grabación utilizable."
+              : "No usable audio recording was received.",
+
           technicalDetails:
-              buildTechnicalDetails(
-            evidence,
-            lang,
-          ),
+            buildTechnicalDetails(
+              evidence,
+              lang,
+            ),
         }),
         lang,
       );
@@ -56,15 +91,17 @@ export default async function handler(req, res) {
         buildInsufficientResult({
           lang,
           soundFocus,
+
           limitation:
-              lang === "es"
-                  ? "El análisis directo requiere audio WAV o MP3."
-                  : "Direct audio analysis requires WAV or MP3 audio.",
+            lang === "es"
+              ? "El análisis directo requiere audio WAV o MP3."
+              : "Direct audio analysis requires WAV or MP3 audio.",
+
           technicalDetails:
-              buildTechnicalDetails(
-            evidence,
-            lang,
-          ),
+            buildTechnicalDetails(
+              evidence,
+              lang,
+            ),
         }),
         lang,
       );
@@ -79,44 +116,46 @@ export default async function handler(req, res) {
         buildInsufficientResult({
           lang,
           soundFocus,
+
           limitation:
-              lang === "es"
-                  ? "La validación local marcó la grabación como no utilizable para interpretación acústica."
-                  : "Local validation marked the recording as unusable for acoustic interpretation.",
+            lang === "es"
+              ? "La validación local marcó la grabación como no utilizable para interpretación acústica."
+              : "Local validation marked the recording as unusable for acoustic interpretation.",
+
           technicalDetails:
-              buildTechnicalDetails(
-            evidence,
-            lang,
-          ),
+            buildTechnicalDetails(
+              evidence,
+              lang,
+            ),
         }),
         lang,
       );
     }
 
     const prompt =
-        buildPrompt({
-      lang,
-      soundFocus,
-      durationSeconds,
-      vehicleProfile,
-      audioFollowUpAnswers,
-      evidence,
-    });
+      buildPrompt({
+        lang,
+        soundFocus,
+        durationSeconds,
+        vehicleProfile,
+        audioFollowUpAnswers,
+        evidence,
+      });
 
     const raw =
-        await requestDirectAudioDiagnosis({
-      prompt,
-      audioBase64,
-      format,
-    });
+      await requestDirectAudioDiagnosis({
+        prompt,
+        audioBase64,
+        format,
+      });
 
     const diagnosis =
-        normalizeDiagnosis({
-      raw,
-      lang,
-      soundFocus,
-      evidence,
-    });
+      normalizeDiagnosis({
+        raw,
+        lang,
+        soundFocus,
+        evidence,
+      });
 
     return sendDiagnosis(
       res,
@@ -133,19 +172,25 @@ export default async function handler(req, res) {
       res,
       buildInsufficientResult({
         lang,
+
         soundFocus:
-            lang === "es"
-                ? "No confirmado"
-                : "Unconfirmed",
+          lang === "es"
+            ? "No confirmado"
+            : "Unconfirmed",
+
         limitation:
-            lang === "es"
-                ? "El análisis de audio no pudo completarse de forma verificable."
-                : "The audio analysis could not be completed in a verifiable way.",
+          lang === "es"
+            ? "El análisis de audio no pudo completarse de forma verificable."
+            : "The audio analysis could not be completed in a verifiable way.",
       }),
       lang,
     );
   }
 }
+
+// ============================================================
+// Response
+// ============================================================
 
 function sendDiagnosis(
   res,
@@ -154,13 +199,22 @@ function sendDiagnosis(
 ) {
   return res.status(200).json({
     diagnosis,
+
+    /*
+     * Temporary compatibility channel for the old
+     * DriveShift audio response path.
+     */
     result:
-        buildLegacyResult(
-      diagnosis,
-      lang,
-    ),
+      buildLegacyResult(
+        diagnosis,
+        lang,
+      ),
   });
 }
+
+// ============================================================
+// Diagnostic prompt
+// ============================================================
 
 function buildPrompt({
   lang,
@@ -185,23 +239,151 @@ Confirmed follow-up answers: ${safeJson(audioFollowUpAnswers)}
 VERIFIED AUDIO EVIDENCE
 ${evidence ? safeJson(evidence) : "None supplied."}
 
-EVIDENCE CONTRACT
+EVIDENCE LAYERS
+
+1. MEASURED EVIDENCE
+
+Directly measured signal quantities such as:
+- RMS level
+- peak level
+- clipping ratio
+- zero-crossing rate
+- dominant frequency
+- spectral centroid
+
+2. OBSERVED EVIDENCE
+
+Acoustic descriptions derived from measured evidence.
+
+These describe signal behavior.
+They do NOT identify confirmed failed components.
+
+3. INFERRED ACOUSTIC EVIDENCE
+
+Mathematically derived acoustic structures such as:
+- estimated acoustic fundamental
+- harmonicity
+- harmonic peaks
+
+These are not direct sensor measurements.
+
+4. DIAGNOSTIC HYPOTHESES
+
+Possible vehicle causes.
+
+These are never measurements and never confirmed failures without independent verification.
+
+GENERAL EVIDENCE CONTRACT
 
 - The original audio is acoustic input, not automatic proof of a failed component.
-- Capture location only describes where the phone was placed.
-- Entries marked "measured" are measurements. Preserve their names, values, units, IDs, and meaning.
-- Entries marked "observed" are derived acoustic descriptions, not confirmed failures.
-- Never invent frequencies, dBFS values, clipping values, RPM correlation, speed correlation, measurements, or evidence IDs.
+- Capture location describes only where the phone was placed.
+- Preserve measured evidence names, values, units, IDs, and meaning.
+- Never invent frequencies.
+- Never invent dBFS values.
+- Never invent clipping values.
+- Never invent RPM.
+- Never invent rotational speed.
+- Never invent measurements.
+- Never invent evidence IDs.
+- Never invent RPM or speed correlations.
 - Never convert an acoustic measurement into a confirmed failed part.
-- Causes are hypotheses only.
-- supportingEvidenceIds may contain only IDs supplied in VERIFIED AUDIO EVIDENCE.
-- Do not use HIGH confidence merely because a location was selected.
-- If the evidence cannot support a responsible direction, return insufficient_evidence.
-- If one or two behavioral questions would materially separate plausible causes, return follow_up_required.
+- Entries marked "observed" are descriptions, not failures.
+- Entries marked "inferred" are derived evidence, not direct measurements.
+- Causes are diagnostic hypotheses only.
+- supportingEvidenceIds may contain only IDs actually supplied in VERIFIED AUDIO EVIDENCE.
+- Do not use HIGH confidence merely because a capture location was selected.
 - Do not recommend replacing a component from audio evidence alone.
-- Every cause must include a practical verification step.
+- Every cause must include a practical verification direction.
+- If the evidence cannot support a responsible diagnostic direction, return insufficient_evidence.
+- If one or two behavioral questions would materially separate plausible causes, return follow_up_required.
+
+HARMONIC EVIDENCE CONTRACT
+
+If VERIFIED AUDIO EVIDENCE contains a "harmonics" object:
+
+- Harmonic evidence is mathematically derived acoustic evidence.
+
+- "Estimated acoustic fundamental" is an acoustic frequency estimate only.
+
+- NEVER rename estimated acoustic fundamental as:
+  - engine RPM
+  - crankshaft speed
+  - pulley speed
+  - bearing speed
+  - shaft speed
+  - component rotational speed
+
+- NEVER calculate RPM simply by multiplying an acoustic fundamental by 60.
+
+- NEVER claim a specific engine order from harmonic evidence alone.
+
+- A future independent RPM/order-tracking layer is required before acoustic frequency can be associated with measured rotational speed.
+
+- Harmonicity score measures consistency of harmonic structure only.
+
+- Harmonicity score is NOT:
+  - diagnostic confidence
+  - failure probability
+  - severity
+  - component health
+
+- A harmonic peak's relativeDb is relative only to the strongest harmonic included in that detected harmonic pattern.
+
+- relativeDb is NOT dBFS.
+
+- relativeDb is NOT sound-pressure level.
+
+- Linear harmonic magnitude is NOT dBFS.
+
+- Harmonic spacing may support a description such as:
+  "periodic or harmonically structured acoustic content."
+
+- Harmonic evidence alone cannot identify the physical vehicle component producing the sound.
+
+- Harmonic evidence alone cannot justify HIGH diagnostic confidence.
+
+- Harmonic evidence may strengthen or weaken a hypothesis only when combined with independent context such as:
+  - verified measured signal evidence
+  - sound behavior
+  - confirmed operating-condition answers
+  - future verified RPM/order evidence
+
+- If harmonic evidence is insufficient_evidence or unavailable, do not use it diagnostically.
+
+- Do not invent missing harmonic peaks.
+
+- Do not invent missing harmonic orders.
+
+FOLLOW-UP QUESTION CONTRACT
+
+- Ask no more than two questions.
+
+- Ask only questions that materially separate plausible causes.
+
+- Questions must be answerable by a normal vehicle owner without specialized equipment.
+
+- Do not force certainty.
+
+- Every follow-up question must permit the user to answer "Not sure" or the Spanish equivalent.
+
+- A user answer is confirmed user context, not a measured sensor value.
+
+- Never describe a user-reported RPM range as measured RPM unless RPM came from a verified sensor or OBD evidence source.
+
+SAFETY CONTRACT
+
+- Do not instruct a general user to touch, manually rotate, reach toward, or place tools near moving belts, pulleys, fans, shafts, or other rotating components while the engine is running.
+
+- Do not instruct a general user to place a mechanic's stethoscope or another physical probe near moving engine components while the engine is running.
+
+- If engine-running localization near rotating components would normally require a technician procedure, recommend inspection by a qualified technician using appropriate diagnostic methods.
+
+- Visual inspection of belts, pulleys, wiring, hoses, and similar engine-bay components must be described as engine-off unless the task specifically and safely requires otherwise.
+
+- Keep safety guidance proportional and concise.
 
 Return ONE JSON object only.
+
 No markdown.
 No code fences.
 No text before or after the JSON.
@@ -234,7 +416,7 @@ Use exactly this structure:
         "option 1",
         "option 2",
         "option 3",
-        "option 4"
+        "Not sure"
       ]
     }
   ],
@@ -247,60 +429,81 @@ Keep the report concise, technical, calm, and evidence-driven.
 `;
 }
 
+// ============================================================
+// OpenAI direct audio
+// ============================================================
+
 async function requestDirectAudioDiagnosis({
   prompt,
   audioBase64,
   format,
 }) {
   const response =
-      await fetch(
-    "https://api.openai.com/v1/chat/completions",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type":
+    await fetch(
+      "https://api.openai.com/v1/chat/completions",
+      {
+        method: "POST",
+
+        headers: {
+          "Content-Type":
             "application/json",
-        Authorization:
+
+          Authorization:
             `Bearer ${process.env.OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: AUDIO_MODEL,
-        messages: [
-          {
-            role: "system",
-            content:
-                "You are DriveShift's evidence-constrained automotive audio diagnostic engine. Separate measured evidence, acoustic observations, hypotheses, and verification. Never invent measurements or confirmed failures.",
-          },
-          {
-            role: "user",
-            content: [
+        },
+
+        body:
+          JSON.stringify({
+            model:
+              AUDIO_MODEL,
+
+            messages: [
               {
-                type: "text",
-                text: prompt,
+                role:
+                  "system",
+
+                content:
+                  "You are DriveShift's evidence-constrained automotive audio diagnostic engine. Strictly separate measured evidence, observations, inferred acoustic evidence, diagnostic hypotheses, and verification. Never invent measurements, RPM relationships, rotational correlations, or confirmed failures.",
               },
               {
-                type:
-                    "input_audio",
-                input_audio: {
-                  data:
-                      audioBase64,
-                  format,
-                },
+                role:
+                  "user",
+
+                content: [
+                  {
+                    type:
+                      "text",
+
+                    text:
+                      prompt,
+                  },
+                  {
+                    type:
+                      "input_audio",
+
+                    input_audio: {
+                      data:
+                        audioBase64,
+
+                      format,
+                    },
+                  },
+                ],
               },
             ],
-          },
-        ],
-        temperature:
-            0.05,
-        max_tokens:
-            1600,
-      }),
-    },
-  );
+
+            temperature:
+              0.05,
+
+            max_tokens:
+              1800,
+          }),
+      },
+    );
 
   if (!response.ok) {
     const errorText =
-        await response.text();
+      await response.text();
 
     console.log(
       "OPENAI DIRECT AUDIO ERROR:",
@@ -314,15 +517,15 @@ async function requestDirectAudioDiagnosis({
   }
 
   const data =
-      await response.json();
+    await response.json();
 
   const content =
-      data?.choices?.[0]?.message?.content;
+    data?.choices?.[0]?.message?.content;
 
   const text =
-      typeof content === "string"
-          ? content.trim()
-          : "";
+    typeof content === "string"
+      ? content.trim()
+      : "";
 
   if (!text) {
     throw new Error(
@@ -335,6 +538,10 @@ async function requestDirectAudioDiagnosis({
   );
 }
 
+// ============================================================
+// Diagnosis normalization
+// ============================================================
+
 function normalizeDiagnosis({
   raw,
   lang,
@@ -342,107 +549,132 @@ function normalizeDiagnosis({
   evidence,
 }) {
   const allowedIds =
-      collectEvidenceIds(
-    evidence,
-  );
+    collectEvidenceIds(
+      evidence,
+    );
 
   let status =
-      normalizeStatus(
-    raw?.status,
-  );
+    normalizeStatus(
+      raw?.status,
+    );
 
   const causes =
-      Array.isArray(
-        raw?.causes,
-      )
-          ? raw.causes
-              .slice(0, 3)
-              .map((item) => ({
-                title:
-                    cleanText(
-                  item?.title,
-                  180,
-                ),
-                description:
-                    cleanText(
-                  item?.description,
-                  500,
-                ),
-                confidence:
-                    normalizeConfidence(
-                  item?.confidence,
-                ),
-                supportingEvidenceIds:
-                    normalizeStringArray(
+    Array.isArray(
+      raw?.causes,
+    )
+      ? raw.causes
+          .slice(
+            0,
+            3,
+          )
+          .map(
+            (item) => {
+              const supportingEvidenceIds =
+                normalizeStringArray(
                   item?.supportingEvidenceIds,
                   12,
                 ).filter(
                   (id) =>
-                      allowedIds.has(
-                    id,
+                    allowedIds.has(
+                      id,
+                    ),
+                );
+
+              return {
+                title:
+                  cleanText(
+                    item?.title,
+                    180,
                   ),
-                ),
+
+                description:
+                  cleanText(
+                    item?.description,
+                    500,
+                  ),
+
+                confidence:
+                  normalizeCauseConfidence({
+                    value:
+                      item?.confidence,
+
+                    supportingEvidenceIds,
+                  }),
+
+                supportingEvidenceIds,
+
                 verification:
-                    cleanText(
-                  item?.verification,
-                  500,
-                ),
-              }))
-              .filter(
-                (item) =>
-                    item.title,
-              )
-          : [];
+                  cleanText(
+                    item?.verification,
+                    500,
+                  ),
+              };
+            },
+          )
+          .filter(
+            (item) =>
+              item.title,
+          )
+      : [];
 
   const followUpQuestions =
-      Array.isArray(
-        raw?.followUpQuestions,
-      )
-          ? raw.followUpQuestions
-              .slice(0, 2)
-              .map(
-                (item) => ({
-                  question:
-                      cleanText(
-                    item?.question,
-                    260,
-                  ),
-                  options:
-                      normalizeStringArray(
-                    item?.options,
-                    4,
-                  ),
-                }),
-              )
-              .filter(
-                (item) =>
-                    item.question &&
-                    item.options.length >=
-                        2,
-              )
-          : [];
+    Array.isArray(
+      raw?.followUpQuestions,
+    )
+      ? raw.followUpQuestions
+          .slice(
+            0,
+            2,
+          )
+          .map(
+            (item) => ({
+              question:
+                cleanText(
+                  item?.question,
+                  260,
+                ),
+
+              /*
+               * The backend enforces an uncertainty option.
+               *
+               * The user must never be forced to invent
+               * an observation.
+               */
+              options:
+                normalizeFollowUpOptions(
+                  item?.options,
+                  lang,
+                ),
+            }),
+          )
+          .filter(
+            (item) =>
+              item.question &&
+              item.options.length >= 2,
+          )
+      : [];
 
   const limitations =
-      normalizeStringArray(
-    raw?.limitations,
-    6,
-  );
+    normalizeStringArray(
+      raw?.limitations,
+      8,
+    );
 
   if (
     status === "complete" &&
     causes.length === 0
   ) {
     status =
-        "insufficient_evidence";
+      "insufficient_evidence";
   }
 
   if (
     status ===
-        "follow_up_required" &&
+      "follow_up_required" &&
     followUpQuestions.length === 0
   ) {
     status =
-        "insufficient_evidence";
+      "insufficient_evidence";
   }
 
   return {
@@ -451,94 +683,140 @@ function normalizeDiagnosis({
     soundFocus,
 
     directionConfidence:
-        normalizeConfidence(
-      raw?.directionConfidence,
-    ),
+      normalizeConfidence(
+        raw?.directionConfidence,
+      ),
 
     diagnosticTitle:
-        cleanText(
-          raw?.diagnosticTitle,
-          180,
-        ) ||
-        defaultTitle(
-          status,
-          lang,
-        ),
+      cleanText(
+        raw?.diagnosticTitle,
+        180,
+      ) ||
+      defaultTitle(
+        status,
+        lang,
+      ),
 
     diagnosticSummary:
-        cleanText(
-          raw?.diagnosticSummary,
-          700,
-        ) ||
-        defaultSummary(
-          status,
-          lang,
-        ),
+      cleanText(
+        raw?.diagnosticSummary,
+        700,
+      ) ||
+      defaultSummary(
+        status,
+        lang,
+      ),
 
     causes:
-        status === "complete"
-            ? causes
-            : [],
+      status === "complete"
+        ? causes
+        : [],
 
     nextStepTitle:
-        cleanText(
-          raw?.nextStepTitle,
-          180,
-        ) ||
-        (
-          lang === "es"
-              ? "Verificar antes de reemplazar"
-              : "Verify before replacing"
-        ),
+      cleanText(
+        raw?.nextStepTitle,
+        180,
+      ) ||
+      (
+        lang === "es"
+          ? "Verificar antes de reemplazar"
+          : "Verify before replacing"
+      ),
 
     nextStepBody:
-        cleanText(
-          raw?.nextStepBody,
-          700,
-        ) ||
-        (
-          lang === "es"
-              ? "Realiza una comprobación dirigida antes de reemplazar piezas."
-              : "Perform a targeted verification before replacing parts."
-        ),
+      cleanText(
+        raw?.nextStepBody,
+        700,
+      ) ||
+      (
+        lang === "es"
+          ? "Realiza una comprobación dirigida antes de reemplazar piezas."
+          : "Perform a targeted verification before replacing parts."
+      ),
 
     doNotReplaceTitle:
-        cleanText(
-          raw?.doNotReplaceTitle,
-          180,
-        ) ||
-        (
-          lang === "es"
-              ? "Ningún componente está confirmado todavía"
-              : "No component is confirmed failed yet"
-        ),
+      cleanText(
+        raw?.doNotReplaceTitle,
+        180,
+      ) ||
+      (
+        lang === "es"
+          ? "Ningún componente está confirmado todavía"
+          : "No component is confirmed failed yet"
+      ),
 
     doNotReplaceBody:
-        cleanText(
-          raw?.doNotReplaceBody,
-          700,
-        ) ||
-        (
-          lang === "es"
-              ? "El audio puede orientar el diagnóstico, pero no confirma por sí solo una pieza defectuosa."
-              : "Audio can guide diagnosis, but it does not by itself confirm a failed part."
-        ),
+      cleanText(
+        raw?.doNotReplaceBody,
+        700,
+      ) ||
+      (
+        lang === "es"
+          ? "El audio puede orientar el diagnóstico, pero no confirma por sí solo una pieza defectuosa."
+          : "Audio can guide diagnosis, but it does not by itself confirm a failed part."
+      ),
 
     technicalDetails:
-        buildTechnicalDetails(
-      evidence,
-      lang,
-    ),
+      buildTechnicalDetails(
+        evidence,
+        lang,
+      ),
 
     followUpQuestions:
-        status ===
-                "follow_up_required"
-            ? followUpQuestions
-            : [],
+      status ===
+        "follow_up_required"
+        ? followUpQuestions
+        : [],
 
     limitations,
   };
 }
+
+/*
+ * HIGH cause confidence must never be produced from
+ * harmonic evidence alone.
+ */
+function normalizeCauseConfidence({
+  value,
+  supportingEvidenceIds,
+}) {
+  const confidence =
+    normalizeConfidence(
+      value,
+    );
+
+  if (
+    confidence !== "high"
+  ) {
+    return confidence;
+  }
+
+  if (
+    supportingEvidenceIds.length === 0
+  ) {
+    return "medium";
+  }
+
+  const onlyHarmonicEvidence =
+    supportingEvidenceIds.every(
+      (id) =>
+        isHarmonicEvidenceId(
+          id,
+        ),
+    );
+
+  if (
+    onlyHarmonicEvidence
+  ) {
+    return "medium";
+  }
+
+  return confidence;
+}
+
+// ============================================================
+// Audio evidence normalization
+// ============================================================
 
 function normalizeAudioEvidence(
   value,
@@ -552,149 +830,771 @@ function normalizeAudioEvidence(
   }
 
   const recording =
-      value.recording || {};
+    value.recording || {};
 
   const quality =
-      value.quality || {};
+    value.quality || {};
+
+  // ----------------------------------------------------------
+  // Measured signals
+  // ----------------------------------------------------------
+
+  const signals =
+    Array.isArray(
+      value.signals,
+    )
+      ? value.signals
+          .slice(
+            0,
+            32,
+          )
+          .map(
+            (item) => ({
+              id:
+                cleanText(
+                  item?.id,
+                  100,
+                ),
+
+              name:
+                cleanText(
+                  item?.name,
+                  160,
+                ),
+
+              numericValue:
+                normalizeNumber(
+                  item?.numericValue,
+                ),
+
+              displayValue:
+                cleanText(
+                  item?.displayValue,
+                  160,
+                ),
+
+              unit:
+                cleanText(
+                  item?.unit,
+                  40,
+                ),
+
+              status:
+                normalizeEvidenceStatus(
+                  item?.status,
+                ),
+
+              source:
+                cleanText(
+                  item?.source,
+                  120,
+                ),
+            }),
+          )
+          .filter(
+            (item) =>
+              item.id,
+          )
+      : [];
+
+  const signalIds =
+    new Set(
+      signals
+        .map(
+          (item) =>
+            item.id,
+        )
+        .filter(Boolean),
+    );
+
+  // ----------------------------------------------------------
+  // Acoustic observations
+  // ----------------------------------------------------------
+
+  const observations =
+    Array.isArray(
+      value.observations,
+    )
+      ? value.observations
+          .slice(
+            0,
+            32,
+          )
+          .map(
+            (item) => ({
+              id:
+                cleanText(
+                  item?.id,
+                  100,
+                ),
+
+              label:
+                cleanText(
+                  item?.label,
+                  180,
+                ),
+
+              description:
+                cleanText(
+                  item?.description,
+                  500,
+                ),
+
+              status:
+                normalizeEvidenceStatus(
+                  item?.status,
+                ),
+
+              supportingSignalIds:
+                normalizeStringArray(
+                  item?.supportingSignalIds,
+                  16,
+                ).filter(
+                  (id) =>
+                    signalIds.has(
+                      id,
+                    ),
+                ),
+            }),
+          )
+          .filter(
+            (item) =>
+              item.id,
+          )
+      : [];
+
+  const observationIds =
+    new Set(
+      observations
+        .map(
+          (item) =>
+            item.id,
+        )
+        .filter(Boolean),
+    );
+
+  /*
+   * Harmonic evidence can reference only existing
+   * base evidence IDs.
+   */
+  const baseEvidenceIds =
+    new Set([
+      ...signalIds,
+      ...observationIds,
+    ]);
+
+  const harmonics =
+    normalizeHarmonicEvidence({
+      value:
+        value.harmonics,
+
+      allowedSupportingIds:
+        baseEvidenceIds,
+    });
 
   return {
     recording: {
       sourceZone:
-          cleanText(
-        recording.sourceZone,
-        80,
-      ),
+        cleanText(
+          recording.sourceZone,
+          80,
+        ),
+
       durationMilliseconds:
-          normalizeNumber(
-        recording.durationMilliseconds,
-      ),
+        normalizeNumber(
+          recording.durationMilliseconds,
+        ),
+
       sampleRateHz:
-          normalizeNumber(
-        recording.sampleRateHz,
-      ),
+        normalizeNumber(
+          recording.sampleRateHz,
+        ),
+
       channelCount:
-          normalizeNumber(
-        recording.channelCount,
-      ),
+        normalizeNumber(
+          recording.channelCount,
+        ),
+
       format:
-          cleanText(
-        recording.format,
-        30,
-      ),
+        cleanText(
+          recording.format,
+          30,
+        ),
     },
 
     quality: {
       state:
-          normalizeQualityState(
-        quality.state,
-      ),
+        normalizeQualityState(
+          quality.state,
+        ),
+
       signalLevel:
-          normalizeNumber(
-        quality.signalLevel,
-      ),
+        normalizeNumber(
+          quality.signalLevel,
+        ),
+
       clippingRatio:
-          normalizeNumber(
-        quality.clippingRatio,
-      ),
+        normalizeNumber(
+          quality.clippingRatio,
+        ),
+
       noiseRatio:
-          normalizeNumber(
-        quality.noiseRatio,
-      ),
+        normalizeNumber(
+          quality.noiseRatio,
+        ),
+
       limitations:
-          normalizeStringArray(
-        quality.limitations,
-        10,
-      ),
+        normalizeStringArray(
+          quality.limitations,
+          10,
+        ),
     },
 
-    signals:
-        Array.isArray(
-          value.signals,
-        )
-            ? value.signals
-                .slice(0, 32)
-                .map(
-                  (item) => ({
-                    id:
-                        cleanText(
-                      item?.id,
-                      100,
-                    ),
-                    name:
-                        cleanText(
-                      item?.name,
-                      160,
-                    ),
-                    numericValue:
-                        normalizeNumber(
-                      item?.numericValue,
-                    ),
-                    displayValue:
-                        cleanText(
-                      item?.displayValue,
-                      160,
-                    ),
-                    unit:
-                        cleanText(
-                      item?.unit,
-                      40,
-                    ),
-                    status:
-                        normalizeEvidenceStatus(
-                      item?.status,
-                    ),
-                    source:
-                        cleanText(
-                      item?.source,
-                      120,
-                    ),
-                  }),
-                )
-            : [],
+    signals,
 
-    observations:
-        Array.isArray(
-          value.observations,
-        )
-            ? value.observations
-                .slice(0, 32)
-                .map(
-                  (item) => ({
-                    id:
-                        cleanText(
-                      item?.id,
-                      100,
-                    ),
-                    label:
-                        cleanText(
-                      item?.label,
-                      180,
-                    ),
-                    description:
-                        cleanText(
-                      item?.description,
-                      500,
-                    ),
-                    status:
-                        normalizeEvidenceStatus(
-                      item?.status,
-                    ),
-                    supportingSignalIds:
-                        normalizeStringArray(
-                      item?.supportingSignalIds,
-                      16,
-                    ),
-                  }),
-                )
-            : [],
+    observations,
+
+    /*
+     * Invalid / absent harmonic data is omitted.
+     */
+    ...(harmonics
+      ? {
+          harmonics,
+        }
+      : {}),
 
     capturedAt:
-        cleanText(
-      value.capturedAt,
-      80,
-    ),
+      cleanText(
+        value.capturedAt,
+        80,
+      ),
   };
 }
+
+// ============================================================
+// Harmonic evidence normalization
+// ============================================================
+
+function normalizeHarmonicEvidence({
+  value,
+  allowedSupportingIds,
+}) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value)
+  ) {
+    return null;
+  }
+
+  const state =
+    normalizeHarmonicEvidenceState(
+      value.state,
+    );
+
+  const source =
+    cleanText(
+      value.source,
+      120,
+    );
+
+  const limitations =
+    normalizeStringArray(
+      value.limitations,
+      12,
+    );
+
+  /*
+   * Unknown implementations are not allowed to
+   * masquerade as DriveShift Harmonic V1 evidence.
+   */
+  if (
+    source !==
+    HARMONIC_SOURCE_ID
+  ) {
+    return {
+      state:
+        "unavailable",
+
+      source:
+        HARMONIC_SOURCE_ID,
+
+      estimatedFundamental:
+        null,
+
+      harmonicity:
+        null,
+
+      detectedHarmonicCount:
+        0,
+
+      peaks:
+        [],
+
+      limitations: [
+        ...limitations,
+        "Harmonic evidence source did not match the validated DriveShift harmonic contract.",
+      ].slice(
+        0,
+        12,
+      ),
+    };
+  }
+
+  /*
+   * Insufficient / unavailable evidence must not carry
+   * stale acoustic values into reasoning.
+   */
+  if (
+    state !== "available"
+  ) {
+    return {
+      state,
+
+      source:
+        HARMONIC_SOURCE_ID,
+
+      estimatedFundamental:
+        null,
+
+      harmonicity:
+        null,
+
+      detectedHarmonicCount:
+        0,
+
+      peaks:
+        [],
+
+      limitations,
+    };
+  }
+
+  const fundamental =
+    normalizeHarmonicScalar({
+      value:
+        value.estimatedFundamental,
+
+      expectedId:
+        HARMONIC_FUNDAMENTAL_ID,
+
+      min:
+        0.000001,
+
+      max:
+        null,
+
+      allowedSupportingIds,
+    });
+
+  const harmonicity =
+    normalizeHarmonicScalar({
+      value:
+        value.harmonicity,
+
+      expectedId:
+        HARMONICITY_ID,
+
+      min:
+        0.0,
+
+      max:
+        1.0,
+
+      allowedSupportingIds,
+    });
+
+  const peaks =
+    Array.isArray(
+      value.peaks,
+    )
+      ? value.peaks
+          .slice(
+            0,
+            16,
+          )
+          .map(
+            (item) =>
+              normalizeHarmonicPeak({
+                value:
+                  item,
+
+                allowedSupportingIds,
+              }),
+          )
+          .filter(Boolean)
+      : [];
+
+  /*
+   * Repeat app-side protection at the backend
+   * trust boundary.
+   */
+  if (
+    !fundamental ||
+    !harmonicity ||
+    peaks.length < 3
+  ) {
+    return {
+      state:
+        "insufficient_evidence",
+
+      source:
+        HARMONIC_SOURCE_ID,
+
+      estimatedFundamental:
+        null,
+
+      harmonicity:
+        null,
+
+      detectedHarmonicCount:
+        0,
+
+      peaks:
+        [],
+
+      limitations: [
+        ...limitations,
+        "Harmonic evidence did not pass backend contract validation.",
+      ].slice(
+        0,
+        12,
+      ),
+    };
+  }
+
+  return {
+    state:
+      "available",
+
+    source:
+      HARMONIC_SOURCE_ID,
+
+    estimatedFundamental:
+      fundamental,
+
+    harmonicity,
+
+    /*
+     * Never trust a client-supplied count.
+     */
+    detectedHarmonicCount:
+      peaks.length,
+
+    peaks,
+
+    limitations,
+  };
+}
+
+// ============================================================
+// Harmonic scalar normalization
+// ============================================================
+
+function normalizeHarmonicScalar({
+  value,
+  expectedId,
+  min,
+  max,
+  allowedSupportingIds,
+}) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value)
+  ) {
+    return null;
+  }
+
+  const id =
+    cleanText(
+      value.id,
+      100,
+    );
+
+  if (
+    id !== expectedId
+  ) {
+    return null;
+  }
+
+  const numericValue =
+    normalizeNumber(
+      value.numericValue,
+    );
+
+  if (
+    numericValue === null
+  ) {
+    return null;
+  }
+
+  if (
+    min !== null &&
+    numericValue < min
+  ) {
+    return null;
+  }
+
+  if (
+    max !== null &&
+    numericValue > max
+  ) {
+    return null;
+  }
+
+  const status =
+    normalizeEvidenceStatus(
+      value.status,
+    );
+
+  /*
+   * Harmonic scalar evidence must remain inferred.
+   */
+  if (
+    status !== "inferred"
+  ) {
+    return null;
+  }
+
+  const source =
+    cleanText(
+      value.source,
+      120,
+    );
+
+  if (
+    source !==
+    HARMONIC_SOURCE_ID
+  ) {
+    return null;
+  }
+
+  return {
+    id,
+
+    name:
+      cleanText(
+        value.name,
+        180,
+      ),
+
+    numericValue,
+
+    displayValue:
+      cleanText(
+        value.displayValue,
+        120,
+      ),
+
+    unit:
+      cleanText(
+        value.unit,
+        30,
+      ),
+
+    status:
+      "inferred",
+
+    source:
+      HARMONIC_SOURCE_ID,
+
+    derivation:
+      cleanText(
+        value.derivation,
+        500,
+      ),
+
+    supportingEvidenceIds:
+      normalizeStringArray(
+        value.supportingEvidenceIds,
+        16,
+      ).filter(
+        (id) =>
+          allowedSupportingIds.has(
+            id,
+          ),
+      ),
+
+    limitations:
+      normalizeStringArray(
+        value.limitations,
+        10,
+      ),
+  };
+}
+
+// ============================================================
+// Harmonic peak normalization
+// ============================================================
+
+function normalizeHarmonicPeak({
+  value,
+  allowedSupportingIds,
+}) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value)
+  ) {
+    return null;
+  }
+
+  const id =
+    cleanText(
+      value.id,
+      100,
+    );
+
+  if (
+    !/^HARM_PEAK_\d{2}$/.test(
+      id,
+    )
+  ) {
+    return null;
+  }
+
+  const harmonicNumber =
+    normalizeInteger(
+      value.harmonicNumber,
+    );
+
+  const expectedFrequencyHz =
+    normalizeNumber(
+      value.expectedFrequencyHz,
+    );
+
+  const detectedFrequencyHz =
+    normalizeNumber(
+      value.detectedFrequencyHz,
+    );
+
+  const magnitude =
+    normalizeNumber(
+      value.magnitude,
+    );
+
+  const relativeDb =
+    normalizeNumber(
+      value.relativeDb,
+    );
+
+  const frequencyDeviationHz =
+    normalizeNumber(
+      value.frequencyDeviationHz,
+    );
+
+  if (
+    harmonicNumber === null ||
+    harmonicNumber <= 0 ||
+    expectedFrequencyHz === null ||
+    expectedFrequencyHz <= 0 ||
+    detectedFrequencyHz === null ||
+    detectedFrequencyHz <= 0 ||
+    magnitude === null ||
+    magnitude < 0 ||
+    relativeDb === null ||
+    frequencyDeviationHz === null ||
+    frequencyDeviationHz < 0
+  ) {
+    return null;
+  }
+
+  const expectedId =
+    `HARM_PEAK_${String(
+      harmonicNumber,
+    ).padStart(
+      2,
+      "0",
+    )}`;
+
+  if (
+    id !== expectedId
+  ) {
+    return null;
+  }
+
+  const status =
+    normalizeEvidenceStatus(
+      value.status,
+    );
+
+  if (
+    status !== "inferred"
+  ) {
+    return null;
+  }
+
+  const source =
+    cleanText(
+      value.source,
+      120,
+    );
+
+  if (
+    source !==
+    HARMONIC_SOURCE_ID
+  ) {
+    return null;
+  }
+
+  return {
+    id,
+
+    harmonicNumber,
+
+    expectedFrequencyHz,
+
+    detectedFrequencyHz,
+
+    /*
+     * Linear spectrum magnitude.
+     * NOT dBFS.
+     */
+    magnitude,
+
+    /*
+     * Relative only to the strongest harmonic
+     * within this pattern.
+     */
+    relativeDb,
+
+    frequencyDeviationHz,
+
+    status:
+      "inferred",
+
+    source:
+      HARMONIC_SOURCE_ID,
+
+    derivation:
+      cleanText(
+        value.derivation,
+        500,
+      ),
+
+    supportingEvidenceIds:
+      normalizeStringArray(
+        value.supportingEvidenceIds,
+        16,
+      ).filter(
+        (supportingId) =>
+          allowedSupportingIds.has(
+            supportingId,
+          ),
+      ),
+
+    limitations:
+      normalizeStringArray(
+        value.limitations,
+        10,
+      ),
+  };
+}
+
+// ============================================================
+// Technical details
+// ============================================================
 
 function buildTechnicalDetails(
   evidence,
@@ -705,18 +1605,19 @@ function buildTechnicalDetails(
   }
 
   const details =
-      [];
+    [];
 
   if (
     evidence.quality?.state
   ) {
     details.push({
       label:
-          lang === "es"
-              ? "Calidad de grabación"
-              : "Recording quality",
+        lang === "es"
+          ? "Calidad de grabación"
+          : "Recording quality",
+
       value:
-          evidence.quality.state,
+        evidence.quality.state,
     });
   }
 
@@ -725,8 +1626,7 @@ function buildTechnicalDetails(
     of evidence.signals || []
   ) {
     if (
-      signal.status !==
-      "measured"
+      signal.status !== "measured"
     ) {
       continue;
     }
@@ -740,30 +1640,101 @@ function buildTechnicalDetails(
 
     details.push({
       label:
-          signal.name,
+        signal.name,
+
       value:
-          signal.displayValue,
+        signal.displayValue,
+    });
+  }
+
+  /*
+   * Harmonic quantities are displayed only as
+   * derived acoustic data.
+   *
+   * Nothing here is called RPM or component speed.
+   */
+  if (
+    evidence.harmonics?.state ===
+    "available"
+  ) {
+    const fundamental =
+      evidence
+        .harmonics
+        .estimatedFundamental;
+
+    const harmonicity =
+      evidence
+        .harmonics
+        .harmonicity;
+
+    if (
+      fundamental?.displayValue
+    ) {
+      details.push({
+        label:
+          lang === "es"
+            ? "Fundamental acústica estimada"
+            : "Estimated acoustic fundamental",
+
+        value:
+          fundamental.displayValue,
+      });
+    }
+
+    if (
+      harmonicity?.displayValue
+    ) {
+      details.push({
+        label:
+          lang === "es"
+            ? "Índice de harmonicidad acústica"
+            : "Acoustic harmonicity score",
+
+        value:
+          harmonicity.displayValue,
+      });
+    }
+
+    details.push({
+      label:
+        lang === "es"
+          ? "Armónicos detectados"
+          : "Detected harmonic peaks",
+
+      value:
+        String(
+          evidence
+            .harmonics
+            .detectedHarmonicCount ||
+          0,
+        ),
     });
   }
 
   return details.slice(
     0,
-    12,
+    14,
   );
 }
+
+// ============================================================
+// Evidence ID registry
+// ============================================================
 
 function collectEvidenceIds(
   evidence,
 ) {
   const ids =
-      new Set();
+    new Set();
 
   for (
     const item
     of evidence?.signals || []
   ) {
     if (item.id) {
-      ids.add(item.id);
+      ids.add(
+        item.id,
+      );
     }
   }
 
@@ -772,12 +1743,76 @@ function collectEvidenceIds(
     of evidence?.observations || []
   ) {
     if (item.id) {
-      ids.add(item.id);
+      ids.add(
+        item.id,
+      );
+    }
+  }
+
+  if (
+    evidence?.harmonics?.state ===
+    "available"
+  ) {
+    const fundamental =
+      evidence
+        .harmonics
+        .estimatedFundamental;
+
+    const harmonicity =
+      evidence
+        .harmonics
+        .harmonicity;
+
+    if (
+      fundamental?.id
+    ) {
+      ids.add(
+        fundamental.id,
+      );
+    }
+
+    if (
+      harmonicity?.id
+    ) {
+      ids.add(
+        harmonicity.id,
+      );
+    }
+
+    for (
+      const peak
+      of evidence
+        .harmonics
+        .peaks || []
+    ) {
+      if (peak.id) {
+        ids.add(
+          peak.id,
+        );
+      }
     }
   }
 
   return ids;
 }
+
+function isHarmonicEvidenceId(
+  id,
+) {
+  return (
+    id ===
+      HARMONIC_FUNDAMENTAL_ID ||
+    id ===
+      HARMONICITY_ID ||
+    /^HARM_PEAK_\d{2}$/.test(
+      String(id || ""),
+    )
+  );
+}
+
+// ============================================================
+// Sound focus
+// ============================================================
 
 function resolveSoundFocus({
   lang,
@@ -785,27 +1820,27 @@ function resolveSoundFocus({
   selectedSoundPattern,
 }) {
   const zone =
-      String(
-        evidence
-            ?.recording
-            ?.sourceZone ||
-            "",
-      ).toLowerCase();
+    String(
+      evidence
+        ?.recording
+        ?.sourceZone ||
+        "",
+    ).toLowerCase();
 
   if (
     zone === "enginebay"
   ) {
     return lang === "es"
-        ? "Área del motor"
-        : "Engine bay";
+      ? "Área del motor"
+      : "Engine bay";
   }
 
   if (
     zone === "wheelarea"
   ) {
     return lang === "es"
-        ? "Área de rueda"
-        : "Wheel area";
+      ? "Área de rueda"
+      : "Wheel area";
   }
 
   if (
@@ -813,15 +1848,15 @@ function resolveSoundFocus({
     "undervehicleexhaust"
   ) {
     return lang === "es"
-        ? "Debajo / escape"
-        : "Under vehicle / exhaust";
+      ? "Debajo / escape"
+      : "Under vehicle / exhaust";
   }
 
   const legacy =
-      String(
-        selectedSoundPattern ||
-            "",
-      ).toLowerCase();
+    String(
+      selectedSoundPattern ||
+        "",
+    ).toLowerCase();
 
   if (
     legacy.includes(
@@ -832,8 +1867,8 @@ function resolveSoundFocus({
     )
   ) {
     return lang === "es"
-        ? "Área del motor"
-        : "Engine bay";
+      ? "Área del motor"
+      : "Engine bay";
   }
 
   if (
@@ -845,8 +1880,8 @@ function resolveSoundFocus({
     )
   ) {
     return lang === "es"
-        ? "Área de rueda"
-        : "Wheel area";
+      ? "Área de rueda"
+      : "Wheel area";
   }
 
   if (
@@ -864,14 +1899,18 @@ function resolveSoundFocus({
     )
   ) {
     return lang === "es"
-        ? "Debajo / escape"
-        : "Under vehicle / exhaust";
+      ? "Debajo / escape"
+      : "Under vehicle / exhaust";
   }
 
   return lang === "es"
-      ? "No confirmado"
-      : "Unconfirmed";
+    ? "No confirmado"
+    : "Unconfirmed";
 }
+
+// ============================================================
+// Insufficient evidence
+// ============================================================
 
 function buildInsufficientResult({
   lang,
@@ -881,55 +1920,63 @@ function buildInsufficientResult({
 }) {
   return {
     status:
-        "insufficient_evidence",
+      "insufficient_evidence",
 
     soundFocus,
 
     directionConfidence:
-        "unknown",
+      "unknown",
 
     diagnosticTitle:
-        lang === "es"
-            ? "Se necesita más evidencia de audio"
-            : "More audio evidence is needed",
+      lang === "es"
+        ? "Se necesita más evidencia de audio"
+        : "More audio evidence is needed",
 
     diagnosticSummary:
-        lang === "es"
-            ? "La evidencia disponible no permite una dirección diagnóstica responsable sin adivinar."
-            : "The available evidence does not support a responsible diagnostic direction without guessing.",
+      lang === "es"
+        ? "La evidencia disponible no permite una dirección diagnóstica responsable sin adivinar."
+        : "The available evidence does not support a responsible diagnostic direction without guessing.",
 
-    causes: [],
+    causes:
+      [],
 
     nextStepTitle:
-        lang === "es"
-            ? "Verificar antes de reemplazar"
-            : "Verify before replacing",
+      lang === "es"
+        ? "Verificar antes de reemplazar"
+        : "Verify before replacing",
 
     nextStepBody:
-        lang === "es"
-            ? "Repite o complementa la comprobación con una condición de funcionamiento que ayude a confirmar el origen."
-            : "Repeat or supplement the check under an operating condition that can help confirm the source.",
+      lang === "es"
+        ? "Repite o complementa la comprobación con una condición de funcionamiento que ayude a confirmar el origen."
+        : "Repeat or supplement the check under an operating condition that can help confirm the source.",
 
     doNotReplaceTitle:
-        lang === "es"
-            ? "Ningún componente está confirmado todavía"
-            : "No component is confirmed failed yet",
+      lang === "es"
+        ? "Ningún componente está confirmado todavía"
+        : "No component is confirmed failed yet",
 
     doNotReplaceBody:
-        lang === "es"
-            ? "No reemplaces piezas basándote únicamente en esta grabación."
-            : "Do not replace parts based on this recording alone.",
+      lang === "es"
+        ? "No reemplaces piezas basándote únicamente en esta grabación."
+        : "Do not replace parts based on this recording alone.",
 
     technicalDetails,
 
-    followUpQuestions: [],
+    followUpQuestions:
+      [],
 
     limitations:
-        limitation
-            ? [limitation]
-            : [],
+      limitation
+        ? [
+            limitation,
+          ]
+        : [],
   };
 }
+
+// ============================================================
+// Legacy compatibility
+// ============================================================
 
 function buildLegacyResult(
   diagnosis,
@@ -950,22 +1997,25 @@ function buildLegacyResult(
     ];
 
     diagnosis
-        .followUpQuestions
-        .forEach(
-          (item, index) => {
-            const n =
-                index + 1;
+      .followUpQuestions
+      .forEach(
+        (
+          item,
+          index,
+        ) => {
+          const n =
+            index + 1;
 
-            lines.push(
-              "",
-              `Question ${n}:`,
-              item.question,
-              "",
-              `Answer options ${n}:`,
-              ...item.options,
-            );
-          },
-        );
+          lines.push(
+            "",
+            `Question ${n}:`,
+            item.question,
+            "",
+            `Answer options ${n}:`,
+            ...item.options,
+          );
+        },
+      );
 
     return lines.join(
       "\n",
@@ -973,22 +2023,22 @@ function buildLegacyResult(
   }
 
   const causes =
-      diagnosis.causes.length > 0
-          ? diagnosis.causes
-          : [
-              {
-                title:
-                    lang === "es"
-                        ? "Evidencia insuficiente"
-                        : "Insufficient evidence",
-                description:
-                    diagnosis
-                        .diagnosticSummary,
-                verification:
-                    diagnosis
-                        .nextStepBody,
-              },
-            ];
+    diagnosis.causes.length > 0
+      ? diagnosis.causes
+      : [
+          {
+            title:
+              lang === "es"
+                ? "Evidencia insuficiente"
+                : "Insufficient evidence",
+
+            description:
+              diagnosis.diagnosticSummary,
+
+            verification:
+              diagnosis.nextStepBody,
+          },
+        ];
 
   return `Diagnosis status: analysis
 
@@ -1013,31 +2063,29 @@ Answer options:
 None`;
 }
 
+// ============================================================
+// Audio format
+// ============================================================
+
 function normalizeAudioFormat(
   format,
 ) {
   const value =
-      String(
-        format || "",
-      )
-          .trim()
-          .toLowerCase();
+    String(
+      format || "",
+    )
+      .trim()
+      .toLowerCase();
 
   if (
-    value.includes(
-      "wav",
-    )
+    value.includes("wav")
   ) {
     return "wav";
   }
 
   if (
-    value.includes(
-      "mp3",
-    ) ||
-    value.includes(
-      "mpeg",
-    )
+    value.includes("mp3") ||
+    value.includes("mpeg")
   ) {
     return "mp3";
   }
@@ -1045,19 +2093,22 @@ function normalizeAudioFormat(
   return null;
 }
 
+// ============================================================
+// Diagnosis states
+// ============================================================
+
 function normalizeStatus(
   value,
 ) {
   const status =
-      String(
-        value || "",
-      )
-          .trim()
-          .toLowerCase();
+    String(
+      value || "",
+    )
+      .trim()
+      .toLowerCase();
 
   if (
-    status ===
-    "complete"
+    status === "complete"
   ) {
     return "complete";
   }
@@ -1076,31 +2127,27 @@ function normalizeConfidence(
   value,
 ) {
   const confidence =
-      String(
-        value || "",
-      )
-          .trim()
-          .toLowerCase();
+    String(
+      value || "",
+    )
+      .trim()
+      .toLowerCase();
 
   if (
-    confidence ===
-    "high"
+    confidence === "high"
   ) {
     return "high";
   }
 
   if (
-    confidence ===
-        "medium" ||
-    confidence ===
-        "moderate"
+    confidence === "medium" ||
+    confidence === "moderate"
   ) {
     return "medium";
   }
 
   if (
-    confidence ===
-    "low"
+    confidence === "low"
   ) {
     return "low";
   }
@@ -1108,33 +2155,34 @@ function normalizeConfidence(
   return "unknown";
 }
 
+// ============================================================
+// Evidence states
+// ============================================================
+
 function normalizeEvidenceStatus(
   value,
 ) {
   const status =
-      String(
-        value || "",
-      )
-          .trim()
-          .toLowerCase();
+    String(
+      value || "",
+    )
+      .trim()
+      .toLowerCase();
 
   if (
-    status ===
-    "measured"
+    status === "measured"
   ) {
     return "measured";
   }
 
   if (
-    status ===
-    "observed"
+    status === "observed"
   ) {
     return "observed";
   }
 
   if (
-    status ===
-    "inferred"
+    status === "inferred"
   ) {
     return "inferred";
   }
@@ -1146,11 +2194,11 @@ function normalizeQualityState(
   value,
 ) {
   const state =
-      String(
-        value || "",
-      )
-          .trim()
-          .toLowerCase();
+    String(
+      value || "",
+    )
+      .trim()
+      .toLowerCase();
 
   if (
     state === "usable"
@@ -1173,31 +2221,158 @@ function normalizeQualityState(
   return "unknown";
 }
 
+function normalizeHarmonicEvidenceState(
+  value,
+) {
+  const state =
+    String(
+      value || "",
+    )
+      .trim()
+      .toLowerCase()
+      .replace(
+        /[_\-\s]/g,
+        "",
+      );
+
+  if (
+    state === "available"
+  ) {
+    return "available";
+  }
+
+  if (
+    state ===
+    "insufficientevidence"
+  ) {
+    return "insufficient_evidence";
+  }
+
+  return "unavailable";
+}
+
+// ============================================================
+// Follow-up options
+// ============================================================
+
+function normalizeFollowUpOptions(
+  value,
+  lang,
+) {
+  const notSure =
+    lang === "es"
+      ? "No estoy seguro"
+      : "Not sure";
+
+  let options =
+    normalizeStringArray(
+      value,
+      4,
+    );
+
+  const seen =
+    new Set();
+
+  options =
+    options.filter(
+      (item) => {
+        const key =
+          item
+            .toLowerCase()
+            .trim();
+
+        if (
+          seen.has(key)
+        ) {
+          return false;
+        }
+
+        seen.add(key);
+
+        return true;
+      },
+    );
+
+  const hasUncertaintyOption =
+    options.some(
+      (item) => {
+        const normalized =
+          item
+            .toLowerCase()
+            .trim();
+
+        return (
+          normalized ===
+            "not sure" ||
+          normalized ===
+            "unsure" ||
+          normalized ===
+            "i don't know" ||
+          normalized ===
+            "i do not know" ||
+          normalized ===
+            "no estoy seguro" ||
+          normalized ===
+            "no estoy segura" ||
+          normalized ===
+            "no sé"
+        );
+      },
+    );
+
+  if (
+    !hasUncertaintyOption
+  ) {
+    if (
+      options.length >= 4
+    ) {
+      options = [
+        ...options.slice(
+          0,
+          3,
+        ),
+        notSure,
+      ];
+    } else {
+      options.push(
+        notSure,
+      );
+    }
+  }
+
+  return options.slice(
+    0,
+    4,
+  );
+}
+
+// ============================================================
+// Primitive normalization
+// ============================================================
+
 function normalizeStringArray(
   value,
   maxItems,
 ) {
   if (
-    !Array.isArray(
-      value,
-    )
+    !Array.isArray(value)
   ) {
     return [];
   }
 
   return value
-      .slice(
-        0,
-        maxItems,
-      )
-      .map(
-        (item) =>
-            cleanText(
+    .slice(
+      0,
+      maxItems,
+    )
+    .map(
+      (item) =>
+        cleanText(
           item,
           400,
         ),
-      )
-      .filter(Boolean);
+    )
+    .filter(Boolean);
 }
 
 function normalizeNumber(
@@ -1212,13 +2387,31 @@ function normalizeNumber(
   }
 
   const number =
-      Number(value);
+    Number(value);
 
   return Number.isFinite(
     number,
   )
-      ? number
-      : null;
+    ? number
+    : null;
+}
+
+function normalizeInteger(
+  value,
+) {
+  const number =
+    normalizeNumber(
+      value,
+    );
+
+  if (
+    number === null ||
+    !Number.isInteger(number)
+  ) {
+    return null;
+  }
+
+  return number;
 }
 
 function cleanText(
@@ -1228,26 +2421,31 @@ function cleanText(
   return String(
     value ?? "",
   )
-      .replace(
-        /\s+/g,
-        " ",
-      )
-      .trim()
-      .slice(
-        0,
-        maxLength,
-      );
+    .replace(
+      /\s+/g,
+      " ",
+    )
+    .trim()
+    .slice(
+      0,
+      maxLength,
+    );
 }
+
+// ============================================================
+// JSON parser
+// ============================================================
 
 function parseJsonObject(
   text,
 ) {
   let clean =
-      String(
-        text || "",
-      ).trim();
+    String(
+      text || "",
+    ).trim();
 
-  clean = clean
+  clean =
+    clean
       .replace(
         /^```(?:json)?\s*/i,
         "",
@@ -1260,51 +2458,39 @@ function parseJsonObject(
 
   try {
     const parsed =
-        JSON.parse(
-      clean,
-    );
+      JSON.parse(clean);
 
     if (
       parsed &&
-      typeof parsed ===
-          "object" &&
-      !Array.isArray(
-        parsed,
-      )
+      typeof parsed === "object" &&
+      !Array.isArray(parsed)
     ) {
       return parsed;
     }
   } catch (_) {}
 
   const start =
-      clean.indexOf(
-    "{",
-  );
+    clean.indexOf("{");
 
   const end =
-      clean.lastIndexOf(
-    "}",
-  );
+    clean.lastIndexOf("}");
 
   if (
     start !== -1 &&
     end > start
   ) {
     const parsed =
-        JSON.parse(
-      clean.slice(
-        start,
-        end + 1,
-      ),
-    );
+      JSON.parse(
+        clean.slice(
+          start,
+          end + 1,
+        ),
+      );
 
     if (
       parsed &&
-      typeof parsed ===
-          "object" &&
-      !Array.isArray(
-        parsed,
-      )
+      typeof parsed === "object" &&
+      !Array.isArray(parsed)
     ) {
       return parsed;
     }
@@ -1327,6 +2513,10 @@ function safeJson(
   }
 }
 
+// ============================================================
+// Defaults
+// ============================================================
+
 function defaultTitle(
   status,
   lang,
@@ -1336,22 +2526,21 @@ function defaultTitle(
     "follow_up_required"
   ) {
     return lang === "es"
-        ? "Se necesita una confirmación rápida"
-        : "A quick confirmation is needed";
+      ? "Se necesita una confirmación rápida"
+      : "A quick confirmation is needed";
   }
 
   if (
-    status ===
-    "complete"
+    status === "complete"
   ) {
     return lang === "es"
-        ? "Dirección diagnóstica de audio"
-        : "Audio diagnostic direction";
+      ? "Dirección diagnóstica de audio"
+      : "Audio diagnostic direction";
   }
 
   return lang === "es"
-      ? "Evidencia de audio insuficiente"
-      : "Insufficient audio evidence";
+    ? "Evidencia de audio insuficiente"
+    : "Insufficient audio evidence";
 }
 
 function defaultSummary(
@@ -1363,20 +2552,19 @@ function defaultSummary(
     "follow_up_required"
   ) {
     return lang === "es"
-        ? "La grabación aporta información útil, pero una respuesta adicional ayudaría a separar las causas plausibles."
-        : "The recording provides useful information, but one additional answer would help separate plausible causes.";
+      ? "La grabación aporta información útil, pero una respuesta adicional ayudaría a separar las causas plausibles."
+      : "The recording provides useful information, but one additional answer would help separate plausible causes.";
   }
 
   if (
-    status ===
-    "complete"
+    status === "complete"
   ) {
     return lang === "es"
-        ? "La evidencia permite una dirección diagnóstica preliminar que todavía requiere verificación física."
-        : "The evidence supports a preliminary diagnostic direction that still requires physical verification.";
+      ? "La evidencia permite una dirección diagnóstica preliminar que todavía requiere verificación física."
+      : "The evidence supports a preliminary diagnostic direction that still requires physical verification.";
   }
 
   return lang === "es"
-      ? "La evidencia disponible no permite una conclusión responsable sin más verificación."
-      : "The available evidence does not support a responsible conclusion without further verification.";
+    ? "La evidencia disponible no permite una conclusión responsable sin más verificación."
+    : "The available evidence does not support a responsible conclusion without further verification.";
 }
