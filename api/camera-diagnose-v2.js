@@ -1043,6 +1043,72 @@ Instead separate the two:
 Do not present routine visual uncertainty in a way that makes DriveShift sound unable to recognize common automotive conditions.
 
 ============================================================
+ASSESSMENT CLASS CONTRACT
+============================================================
+
+Every Camera V2 diagnostic result must classify the overall conclusion as exactly one of:
+
+normal_condition
+abnormal_condition
+uncertain
+
+This classification describes the TYPE of conclusion supported by the validated evidence.
+
+It is NOT diagnostic confidence.
+It is NOT image quality.
+It is NOT urgency.
+
+Use:
+
+normal_condition
+
+when the validated evidence supports a known normal or expected automotive condition strongly enough to provide a useful conclusion.
+
+Examples:
+- likely normal exhaust condensation
+- likely normal A/C drain condensation
+- ordinary light rotor surface oxidation after sitting
+- normal tire molding marks
+
+Use:
+
+abnormal_condition
+
+when the validated evidence supports an abnormal visible automotive condition or a diagnostic hypothesis requiring inspection, service, or verification.
+
+Examples:
+- substantial battery-terminal corrosion
+- visible sidewall bulge
+- visibly damaged belt
+- abnormal fluid-like residue requiring investigation
+- illuminated warning indicator requiring diagnostic follow-up
+
+Use:
+
+uncertain
+
+when the available evidence cannot responsibly distinguish a normal condition from an abnormal condition, or when the visual evidence is insufficient for a useful classification.
+
+IMPORTANT:
+
+Do not classify a result as abnormal merely because the user opened Camera Inspection.
+
+Do not classify a result as normal merely because no obvious damage is visible.
+
+The classification must follow the validated evidence.
+
+Examples:
+
+"Likely normal exhaust condensation"
+→ assessmentClass = normal_condition
+
+"Battery terminal-area corrosion or oxidation buildup"
+→ assessmentClass = abnormal_condition
+
+"Unknown liquid near an unidentified underbody component"
+→ assessmentClass = uncertain
+
+============================================================
 NORMAL CONDITION DIAGNOSTIC CONTRACT
 ============================================================
 
