@@ -227,14 +227,15 @@ enum: [
     },
   },
 
-  required: [
-    "state",
-    "summary",
-    "hypotheses",
-    "verificationSteps",
-    "safetyGuidance",
-    "limitations",
-  ],
+ required: [
+"state",
+"assessmentClass",
+"summary",
+"hypotheses",
+"verificationSteps",
+"safetyGuidance",
+"limitations",
+],
 };
 
 // ============================================================
