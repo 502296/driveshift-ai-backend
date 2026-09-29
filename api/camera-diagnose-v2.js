@@ -38,6 +38,12 @@ const VALID_DIAGNOSIS_STATES = new Set([
   "verification_required",
 ]);
 
+const VALID_ASSESSMENT_CLASSES = new Set([
+  "normal_condition",
+  "abnormal_condition",
+  "uncertain",
+]);
+
 const VALID_CONFIDENCE = new Set([
   "low",
   "medium",
