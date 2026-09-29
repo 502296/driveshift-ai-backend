@@ -2393,6 +2393,9 @@ function insufficientDiagnosis(
     state:
       "insufficient_evidence",
 
+    assessmentClass:
+      "uncertain",
+
     summary,
 
     hypotheses: [],
