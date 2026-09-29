@@ -66,6 +66,15 @@ const DIAGNOSIS_SCHEMA = {
       ],
     },
 
+    assessmentClass: {
+type: "string",
+enum: [
+"normal_condition",
+"abnormal_condition",
+"uncertain",
+],
+},
+    
     summary: {
       type: "string",
     },
