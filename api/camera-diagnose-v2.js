@@ -2088,13 +2088,15 @@ function normalizeDiagnosis({
       raw.safetyGuidance
     );
 
-  return {
-    state:
-      verificationSteps.length > 0
-        ? "verification_required"
-        : "analysis_available",
+ return {
+  state:
+    verificationSteps.length > 0
+      ? "verification_required"
+      : "analysis_available",
 
-    summary:
+  assessmentClass,
+
+  summary:
       summary ||
       "Validated camera evidence supports one or more hypotheses that remain subject to verification.",
 
