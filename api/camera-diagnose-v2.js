@@ -2040,6 +2040,9 @@ function normalizeDiagnosis({
       state:
         "insufficient_evidence",
 
+      assessmentClass:
+         "uncertain",
+      
       summary:
         summary ||
         "The available evidence does not support a responsible diagnostic hypothesis.",
