@@ -447,14 +447,18 @@ export default async function handler(req, res) {
     // 5. Build diagnostic prompt
     // ========================================================
 
-    const prompt =
-      buildDiagnosticPrompt({
-        language,
-        cameraEvidence,
-        vehicleProfile,
-        allowedEvidenceIds,
-        diagnosticEvidenceIds,
-      });
+   const prompt =
+  buildDiagnosticPrompt({
+    language,
+    cameraEvidence,
+
+    dashboardOperatingContext:
+      normalizedDashboardOperatingContext,
+
+    vehicleProfile,
+    allowedEvidenceIds,
+    diagnosticEvidenceIds,
+  });
 
     // ========================================================
     // 6. OpenAI request
