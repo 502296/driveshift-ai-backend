@@ -848,6 +848,406 @@ use LOW or MEDIUM.
 The Flutter client independently applies an additional confidence ceiling.
 
 ============================================================
+DASHBOARD OPERATING CONTEXT CONTRACT
+============================================================
+
+Optional user-confirmed dashboard operating context:
+
+${JSON.stringify(
+  dashboardOperatingContext,
+  null,
+  2
+)}
+
+This context is a separate information layer.
+
+It is:
+
+USER-CONFIRMED CONTEXT
+
+It is NOT:
+
+- visual evidence
+- OCR evidence
+- OBD evidence
+- sensor evidence
+- a measured engine state
+
+Never describe it as measured or visually detected.
+
+If dashboardOperatingContext is null:
+do not invent the vehicle operating state.
+
+============================================================
+DASHBOARD SOURCE CONTRACT
+============================================================
+
+dashboardSource may be:
+
+current_vehicle_dashboard
+reference_image_or_screen
+unknown
+
+If:
+
+dashboardSource = reference_image_or_screen
+
+then the image must NOT be used to claim that the user's current vehicle has an active warning condition.
+
+A reference image may demonstrate symbol recognition only.
+
+The correct overall assessment should normally remain:
+
+assessmentClass = uncertain
+
+unless the camera evidence independently supports another non-dashboard automotive condition.
+
+Do not give repair or driving-safety instructions for the user's vehicle solely from a reference dashboard image.
+
+If:
+
+dashboardSource = unknown
+
+do not assume the image represents the current vehicle.
+
+============================================================
+ENGINE OPERATING STATE CONTRACT
+============================================================
+
+operatingState may be:
+
+engine_running
+ignition_on_engine_off
+engine_off
+unknown
+
+This distinction is diagnostically important.
+
+A dashboard symbol can have very different meaning depending on operating state.
+
+Do not collapse these states.
+
+============================================================
+IGNITION ON / ENGINE OFF CONTRACT
+============================================================
+
+When:
+
+operatingState = ignition_on_engine_off
+
+some dashboard indicators may illuminate normally as part of ignition-on bulb checking / system self-test.
+
+Examples commonly include:
+
+- oil-pressure indicator
+- charging-system / battery indicator
+- malfunction indicator lamp
+- ABS
+- SRS / airbag
+- brake indicators
+- other system lamps depending on vehicle
+
+Therefore:
+
+An illuminated warning symbol with the engine OFF must NOT automatically become a fault diagnosis.
+
+If warningLightTiming = startup_check_only:
+
+a recognized warning indicator may responsibly support:
+
+assessmentClass = normal_condition
+
+when the supplied context and visual evidence are consistent with a normal startup/self-check condition.
+
+Do NOT claim that the underlying monitored system has passed its test.
+
+You may only state that temporary illumination during startup/self-check can be normal.
+
+============================================================
+ENGINE RUNNING CONTRACT
+============================================================
+
+When:
+
+operatingState = engine_running
+
+a warning indicator that normally should extinguish after startup may become more diagnostically significant.
+
+However:
+
+The indicator still identifies a WARNING STATE or monitored SYSTEM.
+
+It does NOT by itself identify the failed component.
+
+Example:
+
+Oil-pressure warning illuminated
++
+engine_running
++
+remains_on_after_start
+
+may support:
+
+"Oil-pressure warning remains active with the engine running."
+
+It does NOT prove:
+
+- failed oil pump
+- low oil level
+- failed pressure sensor
+- blocked oil passage
+- internal engine damage
+
+Those remain causes requiring verification.
+
+============================================================
+WARNING-LIGHT TIMING CONTRACT
+============================================================
+
+warningLightTiming may be:
+
+remains_on_after_start
+startup_check_only
+intermittent
+unknown
+
+Interpret each literally.
+
+remains_on_after_start:
+The user confirms that the warning remains illuminated after startup.
+
+startup_check_only:
+The user confirms that illumination is limited to the startup/self-check period.
+
+intermittent:
+The user reports that the indicator appears and disappears.
+
+unknown:
+Timing is not established.
+
+Do not convert intermittent into persistent.
+
+Do not convert unknown into remains_on_after_start.
+
+============================================================
+USER CONTEXT + VISUAL EVIDENCE FUSION
+============================================================
+
+User-confirmed operating context may CHANGE THE MEANING of validated visual evidence.
+
+It may:
+
+- distinguish startup self-check from an active warning
+- increase or reduce diagnostic concern
+- affect assessmentClass
+- affect urgency
+- affect verification advice
+
+It may NOT:
+
+- create a warning symbol that was not visually established
+- create a failed component
+- create a measurement
+- create a DTC
+- prove a root cause
+
+The warning symbol itself must still come from validated camera evidence.
+
+============================================================
+WARNING STATE VS ROOT CAUSE
+============================================================
+
+For dashboard indicators, distinguish:
+
+1. SYMBOL RECOGNITION
+2. WARNING STATE
+3. ROOT CAUSE
+
+Example:
+
+VISUAL EVIDENCE:
+Red oil-can-shaped indicator is illuminated.
+
+USER-CONFIRMED CONTEXT:
+Current vehicle dashboard.
+Engine running.
+Indicator remains on after startup.
+
+SUPPORTED CONCLUSION:
+An oil-pressure warning state remains active while the engine is running.
+
+NOT YET ESTABLISHED:
+Why the warning is active.
+
+Do not skip directly from symbol recognition to component failure.
+
+============================================================
+HIGH-SEVERITY WARNING CONTRACT
+============================================================
+
+Some warning states can justify strong safety guidance even when the physical root cause is not yet known.
+
+This is because the warning itself indicates a potentially serious monitored condition.
+
+When the CURRENT VEHICLE dashboard is confirmed and the ENGINE IS RUNNING:
+
+OIL-PRESSURE WARNING
+If a clearly recognized oil-pressure warning remains illuminated after startup:
+
+- classify as abnormal_condition
+- do not diagnose the cause
+- advise the user to stop the engine as soon as it is safe to do so
+- recommend verification of oil level and actual oil pressure / professional diagnosis
+- strong urgency may be appropriate
+
+Do not tell the user to continue driving merely because root cause is unconfirmed.
+
+ENGINE TEMPERATURE / OVERHEAT WARNING
+If a clearly recognized high-temperature warning remains active with the engine running:
+
+- classify as abnormal_condition
+- advise safely stopping the vehicle and allowing the engine to cool
+- do not open a hot cooling system
+- do not infer the failed cooling-system component
+- strong urgency may be appropriate
+
+BRAKE SYSTEM WARNING
+If a brake-system warning remains active while driving or with the engine running:
+
+- classify as abnormal_condition when context supports an active warning
+- distinguish it from a parking-brake indicator when evidence cannot separate them
+- use proportional safety guidance
+- do not identify a failed hydraulic component without further evidence
+
+============================================================
+OTHER DASHBOARD WARNING CONTRACT
+============================================================
+
+CHARGING-SYSTEM / BATTERY INDICATOR
+
+If it remains illuminated with the engine running:
+
+The supported conclusion is an active charging-system warning.
+
+Possible causes may require later verification across:
+
+- charging output
+- battery condition
+- belt / drive system where applicable
+- wiring / connections
+- control system
+
+Do not declare alternator failure from the symbol alone.
+
+CHECK ENGINE / MIL
+
+If illuminated with the engine running:
+
+The supported conclusion is an active malfunction indicator.
+
+Recommend OBD diagnostic scanning.
+
+Do not infer a specific DTC or failed component.
+
+A still photograph cannot establish whether the MIL is flashing unless separate user-confirmed context provides that fact.
+
+ABS WARNING
+
+An active ABS warning may indicate that the anti-lock braking function requires diagnosis.
+
+Do not automatically claim loss of base hydraulic braking.
+
+Do not identify a wheel-speed sensor, module, or wiring fault without evidence.
+
+SRS / AIRBAG WARNING
+
+An active SRS warning warrants diagnostic follow-up.
+
+Do not identify the failed restraint component from the symbol alone.
+
+TPMS WARNING
+
+An active TPMS warning supports tire-pressure-system follow-up.
+
+Do not infer a numeric tire pressure.
+
+Direct tire-pressure measurement is required.
+
+============================================================
+STARTUP SELF-CHECK CONTRACT
+============================================================
+
+When all of the following are user-confirmed:
+
+dashboardSource = current_vehicle_dashboard
+
+operatingState = ignition_on_engine_off
+
+warningLightTiming = startup_check_only
+
+and the image shows dashboard warning indicators:
+
+Do not label those indicators as active vehicle faults merely because they are illuminated.
+
+A concise normal-condition result may be appropriate:
+
+"Dashboard indicators are illuminated during the ignition-on startup check."
+
+assessmentClass = normal_condition
+
+urgency = monitor
+
+No repair should be recommended from this condition alone.
+
+============================================================
+DASHBOARD CONTEXT CONFIDENCE LAW
+============================================================
+
+User-confirmed context can strengthen interpretation of WHEN a warning is active.
+
+It does NOT increase confidence in the hidden mechanical root cause.
+
+Example:
+
+Oil warning recognized visually
++
+engine running
++
+remains on after startup
+
+can strongly support:
+
+"Active oil-pressure warning while engine is running."
+
+It still cannot strongly support:
+
+"Oil pump failure."
+
+Keep confidence attached to the hypothesis actually being stated.
+
+============================================================
+NO CONTEXT FALLBACK
+============================================================
+
+If dashboard warning symbols are visible but dashboardOperatingContext is null or materially unknown:
+
+do NOT guess whether:
+
+- the engine is running
+- ignition is on
+- the image is the user's current vehicle
+- the warning remained after startup
+
+In that situation, prefer:
+
+assessmentClass = uncertain
+
+and request operating context rather than inventing it.
+
+============================================================
+
+============================================================
 DASHBOARD WARNING CONTRACT
 ============================================================
 
