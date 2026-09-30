@@ -6,6 +6,8 @@
 //
 // Validated Camera V2 evidence
 //   +
+// optional user-confirmed dashboard operating context
+//   +
 // vehicle configuration context
 //   ↓
 // automotive diagnostic reasoning
@@ -19,7 +21,15 @@
 // IMPORTANT:
 //
 // This endpoint does NOT inspect the raw image.
-// It reasons only from already-validated evidence.
+//
+// It reasons only from already-validated Camera V2 evidence.
+//
+// Dashboard operating context is handled as a separate
+// USER-CONFIRMED context layer.
+//
+// It is NOT visual evidence.
+// It is NOT OBD evidence.
+// It is NOT sensor evidence.
 // ============================================================
 
 const OPENAI_RESPONSES_URL =
@@ -73,14 +83,14 @@ const DIAGNOSIS_SCHEMA = {
     },
 
     assessmentClass: {
-type: "string",
-enum: [
-"normal_condition",
-"abnormal_condition",
-"uncertain",
-],
-},
-    
+      type: "string",
+      enum: [
+        "normal_condition",
+        "abnormal_condition",
+        "uncertain",
+      ],
+    },
+
     summary: {
       type: "string",
     },
@@ -233,15 +243,15 @@ enum: [
     },
   },
 
- required: [
-"state",
-"assessmentClass",
-"summary",
-"hypotheses",
-"verificationSteps",
-"safetyGuidance",
-"limitations",
-],
+  required: [
+    "state",
+    "assessmentClass",
+    "summary",
+    "hypotheses",
+    "verificationSteps",
+    "safetyGuidance",
+    "limitations",
+  ],
 };
 
 // ============================================================
@@ -269,6 +279,10 @@ export default async function handler(req, res) {
         ? "es"
         : "en";
 
+    // ========================================================
+    // Camera Evidence input
+    // ========================================================
+
     const rawCameraEvidence =
       body.cameraEvidence &&
       typeof body.cameraEvidence === "object"
@@ -285,7 +299,26 @@ export default async function handler(req, res) {
     }
 
     // ========================================================
-    // 1. Normalize evidence
+    // Optional Dashboard Operating Context input
+    // ========================================================
+
+    /*
+     * IMPORTANT:
+     *
+     * This context comes from the user-confirmed Flutter
+     * contract.
+     *
+     * It is intentionally kept separate from cameraEvidence.
+     */
+    const rawDashboardOperatingContext =
+      body.dashboardOperatingContext &&
+      typeof body.dashboardOperatingContext ===
+        "object"
+        ? body.dashboardOperatingContext
+        : null;
+
+    // ========================================================
+    // 1. Normalize Camera Evidence
     // ========================================================
 
     const cameraEvidence =
@@ -301,6 +334,45 @@ export default async function handler(req, res) {
         "The Camera V2 evidence contract is invalid."
       );
     }
+
+    // ========================================================
+    // 1B. Normalize Dashboard Operating Context
+    // ========================================================
+
+    /*
+     * A missing context is valid.
+     *
+     * Most Camera V2 inspections do not need dashboard context.
+     *
+     * Examples:
+     *
+     * - battery
+     * - tire
+     * - belt
+     * - hose
+     * - leak
+     * - engine bay
+     * - visible damage
+     *
+     * In those cases this remains null.
+     */
+    const normalizedDashboardOperatingContext =
+      normalizeDashboardOperatingContext(
+        rawDashboardOperatingContext
+      );
+
+    /*
+     * IMPORTANT:
+     *
+     * normalizedDashboardOperatingContext is intentionally NOT
+     * passed into diagnostic reasoning yet.
+     *
+     * This deployment establishes and validates the transport
+     * contract first.
+     *
+     * Diagnostic integration comes in the next step.
+     */
+    void normalizedDashboardOperatingContext;
 
     // ========================================================
     // 2. Evidence sufficiency gate
@@ -1651,7 +1723,8 @@ function normalizeOcr(
       blocks.push({
         id,
         text,
-        status: "observed",
+        status:
+          "observed",
         source:
           "google_mlkit_text_recognition_v1",
       });
@@ -1824,8 +1897,10 @@ function normalizeVisualEvidence(
       interpretations.push({
         id,
         description,
+
         status:
           "inferred",
+
         source:
           "ai_visual_analysis_v1",
 
@@ -1853,6 +1928,126 @@ function normalizeVisualEvidence(
         12,
         500
       ),
+  };
+}
+
+// ============================================================
+// Dashboard Operating Context normalization
+// ============================================================
+
+function normalizeDashboardOperatingContext(
+  raw
+) {
+  if (
+    !raw ||
+    typeof raw !== "object"
+  ) {
+    return null;
+  }
+
+  const validDashboardSources =
+    new Set([
+      "current_vehicle_dashboard",
+      "reference_image_or_screen",
+      "unknown",
+    ]);
+
+  const validOperatingStates =
+    new Set([
+      "engine_running",
+      "ignition_on_engine_off",
+      "engine_off",
+      "unknown",
+    ]);
+
+  const validWarningLightTimings =
+    new Set([
+      "remains_on_after_start",
+      "startup_check_only",
+      "intermittent",
+      "unknown",
+    ]);
+
+  const source =
+    String(
+      raw.source || ""
+    ).trim();
+
+  const contextClass =
+    String(
+      raw.contextClass || ""
+    ).trim();
+
+  const dashboardSourceRaw =
+    String(
+      raw.dashboardSource || ""
+    )
+      .trim()
+      .toLowerCase();
+
+  const operatingStateRaw =
+    String(
+      raw.operatingState || ""
+    )
+      .trim()
+      .toLowerCase();
+
+  const warningLightTimingRaw =
+    String(
+      raw.warningLightTiming || ""
+    )
+      .trim()
+      .toLowerCase();
+
+  /*
+   * Accept only the DriveShift user-confirmed
+   * dashboard-context contract.
+   *
+   * Arbitrary request data must never be silently promoted
+   * into diagnostic context.
+   */
+  if (
+    source !==
+      "user_confirmed_dashboard_context_v1" ||
+    contextClass !==
+      "user_confirmed"
+  ) {
+    return null;
+  }
+
+  const dashboardSource =
+    validDashboardSources.has(
+      dashboardSourceRaw
+    )
+      ? dashboardSourceRaw
+      : "unknown";
+
+  const operatingState =
+    validOperatingStates.has(
+      operatingStateRaw
+    )
+      ? operatingStateRaw
+      : "unknown";
+
+  const warningLightTiming =
+    validWarningLightTimings.has(
+      warningLightTimingRaw
+    )
+      ? warningLightTimingRaw
+      : "unknown";
+
+  return {
+    source:
+      "user_confirmed_dashboard_context_v1",
+
+    contextClass:
+      "user_confirmed",
+
+    dashboardSource,
+
+    operatingState,
+
+    warningLightTiming,
   };
 }
 
@@ -1930,31 +2125,41 @@ function collectAllowedEvidenceIds(
     const metric of
     evidence.imageQuality.metrics
   ) {
-    ids.add(metric.id);
+    ids.add(
+      metric.id
+    );
   }
 
   for (
     const block of
     evidence.ocr.blocks
   ) {
-    ids.add(block.id);
+    ids.add(
+      block.id
+    );
   }
 
   for (
     const observation of
     evidence.visualEvidence.observations
   ) {
-    ids.add(observation.id);
+    ids.add(
+      observation.id
+    );
   }
 
   for (
     const interpretation of
     evidence.visualEvidence.interpretations
   ) {
-    ids.add(interpretation.id);
+    ids.add(
+      interpretation.id
+    );
   }
 
-  return Array.from(ids);
+  return Array.from(
+    ids
+  );
 }
 
 function collectDiagnosticEvidenceIds(
@@ -1971,24 +2176,32 @@ function collectDiagnosticEvidenceIds(
     const block of
     evidence.ocr.blocks
   ) {
-    ids.add(block.id);
+    ids.add(
+      block.id
+    );
   }
 
   for (
     const observation of
     evidence.visualEvidence.observations
   ) {
-    ids.add(observation.id);
+    ids.add(
+      observation.id
+    );
   }
 
   for (
     const interpretation of
     evidence.visualEvidence.interpretations
   ) {
-    ids.add(interpretation.id);
+    ids.add(
+      interpretation.id
+    );
   }
 
-  return Array.from(ids);
+  return Array.from(
+    ids
+  );
 }
 
 // ============================================================
@@ -2014,17 +2227,25 @@ function normalizeDiagnosis({
 
   const requestedState =
     VALID_DIAGNOSIS_STATES.has(
-      String(raw.state || "")
+      String(
+        raw.state || ""
+      )
     )
-      ? String(raw.state)
+      ? String(
+          raw.state
+        )
       : "insufficient_evidence";
 
   const assessmentClass =
-  VALID_ASSESSMENT_CLASSES.has(
-    String(raw.assessmentClass || "")
-  )
-    ? String(raw.assessmentClass)
-    : "uncertain";
+    VALID_ASSESSMENT_CLASSES.has(
+      String(
+        raw.assessmentClass || ""
+      )
+    )
+      ? String(
+          raw.assessmentClass
+        )
+      : "uncertain";
 
   const summary =
     cleanLongText(
@@ -2048,8 +2269,8 @@ function normalizeDiagnosis({
         "insufficient_evidence",
 
       assessmentClass:
-         "uncertain",
-      
+        "uncertain",
+
       summary:
         summary ||
         "The available evidence does not support a responsible diagnostic hypothesis.",
@@ -2074,7 +2295,9 @@ function normalizeDiagnosis({
       diagnosticEvidenceIds,
     });
 
-  if (hypotheses.length === 0) {
+  if (
+    hypotheses.length === 0
+  ) {
     return insufficientDiagnosis(
       summary ||
         "No diagnostic hypothesis survived evidence validation.",
@@ -2098,15 +2321,15 @@ function normalizeDiagnosis({
       raw.safetyGuidance
     );
 
- return {
-  state:
-    verificationSteps.length > 0
-      ? "verification_required"
-      : "analysis_available",
+  return {
+    state:
+      verificationSteps.length > 0
+        ? "verification_required"
+        : "analysis_available",
 
-  assessmentClass,
+    assessmentClass,
 
-  summary:
+    summary:
       summary ||
       "Validated camera evidence supports one or more hypotheses that remain subject to verification.",
 
@@ -2125,15 +2348,23 @@ function normalizeHypotheses({
   allowedEvidenceIds,
   diagnosticEvidenceIds,
 }) {
-  if (!Array.isArray(raw)) {
+  if (
+    !Array.isArray(
+      raw
+    )
+  ) {
     return [];
   }
 
   const result = [];
+
   const usedIds =
     new Set();
 
-  for (const item of raw) {
+  for (
+    const item of
+    raw
+  ) {
     if (
       result.length >=
       MAX_HYPOTHESES
@@ -2155,8 +2386,12 @@ function normalizeHypotheses({
       );
 
     if (
-      !/^CAM_HYP_\d{3}$/.test(id) ||
-      usedIds.has(id)
+      !/^CAM_HYP_\d{3}$/.test(
+        id
+      ) ||
+      usedIds.has(
+        id
+      )
     ) {
       continue;
     }
@@ -2211,22 +2446,31 @@ function normalizeHypotheses({
 
     let confidence =
       VALID_CONFIDENCE.has(
-        String(item.confidence || "")
+        String(
+          item.confidence || ""
+        )
       )
-        ? String(item.confidence)
+        ? String(
+            item.confidence
+          )
         : "low";
 
     /*
-     * Server-side camera-only ceiling.
+     * Server-side Camera-only ceiling.
      *
      * Flutter independently applies the same defensive ceiling.
      */
-    if (confidence === "high") {
+    if (
+      confidence ===
+      "high"
+    ) {
       confidence =
         "medium";
     }
 
-    usedIds.add(id);
+    usedIds.add(
+      id
+    );
 
     result.push({
       id,
@@ -2236,7 +2480,9 @@ function normalizeHypotheses({
 
       supportingEvidenceIds:
         Array.from(
-          new Set(support)
+          new Set(
+            support
+          )
         ),
 
       limitations:
@@ -2255,22 +2501,31 @@ function normalizeVerificationSteps({
   raw,
   hypotheses,
 }) {
-  if (!Array.isArray(raw)) {
+  if (
+    !Array.isArray(
+      raw
+    )
+  ) {
     return [];
   }
 
   const hypothesisIds =
     new Set(
       hypotheses.map(
-        (item) => item.id
+        (item) =>
+          item.id
       )
     );
 
   const result = [];
+
   const usedIds =
     new Set();
 
-  for (const item of raw) {
+  for (
+    const item of
+    raw
+  ) {
     if (
       result.length >=
       MAX_VERIFICATION_STEPS
@@ -2292,8 +2547,12 @@ function normalizeVerificationSteps({
       );
 
     if (
-      !/^CAM_VER_\d{3}$/.test(id) ||
-      usedIds.has(id)
+      !/^CAM_VER_\d{3}$/.test(
+        id
+      ) ||
+      usedIds.has(
+        id
+      )
     ) {
       continue;
     }
@@ -2304,7 +2563,9 @@ function normalizeVerificationSteps({
         800
       );
 
-    if (!description) {
+    if (
+      !description
+    ) {
       continue;
     }
 
@@ -2325,7 +2586,9 @@ function normalizeVerificationSteps({
       continue;
     }
 
-    usedIds.add(id);
+    usedIds.add(
+      id
+    );
 
     result.push({
       id,
@@ -2364,9 +2627,13 @@ function normalizeSafetyGuidance(
 
   const urgency =
     VALID_URGENCY.has(
-      String(raw.urgency || "")
+      String(
+        raw.urgency || ""
+      )
     )
-      ? String(raw.urgency)
+      ? String(
+          raw.urgency
+        )
       : "monitor";
 
   const summary =
@@ -2487,16 +2754,27 @@ function normalizeRegion(
 function normalizeEvidenceReferenceList(
   raw
 ) {
-  if (!Array.isArray(raw)) {
+  if (
+    !Array.isArray(
+      raw
+    )
+  ) {
     return [];
   }
 
   const result = [];
+
   const seen =
     new Set();
 
-  for (const value of raw) {
-    if (result.length >= 32) {
+  for (
+    const value of
+    raw
+  ) {
+    if (
+      result.length >=
+      32
+    ) {
       break;
     }
 
@@ -2505,12 +2783,20 @@ function normalizeEvidenceReferenceList(
         value
       );
 
-    if (!id) {
+    if (
+      !id
+    ) {
       continue;
     }
 
-    if (seen.add(id)) {
-      result.push(id);
+    if (
+      seen.add(
+        id
+      )
+    ) {
+      result.push(
+        id
+      );
     }
   }
 
@@ -2543,15 +2829,23 @@ function normalizeStringList(
   maxItems,
   maxLength
 ) {
-  if (!Array.isArray(raw)) {
+  if (
+    !Array.isArray(
+      raw
+    )
+  ) {
     return [];
   }
 
   const result = [];
+
   const seen =
     new Set();
 
-  for (const value of raw) {
+  for (
+    const value of
+    raw
+  ) {
     if (
       result.length >=
       maxItems
@@ -2565,12 +2859,20 @@ function normalizeStringList(
         maxLength
       );
 
-    if (!cleaned) {
+    if (
+      !cleaned
+    ) {
       continue;
     }
 
-    if (seen.add(cleaned)) {
-      result.push(cleaned);
+    if (
+      seen.add(
+        cleaned
+      )
+    ) {
+      result.push(
+        cleaned
+      );
     }
   }
 
@@ -2602,7 +2904,9 @@ function cleanLongText(
   }
 
   const cleaned =
-    String(value)
+    String(
+      value
+    )
       .replace(
         /\r\n/g,
         "\n"
@@ -2621,7 +2925,9 @@ function cleanLongText(
       )
       .trim();
 
-  if (!cleaned) {
+  if (
+    !cleaned
+  ) {
     return "";
   }
 
@@ -2642,12 +2948,17 @@ function finiteNumberOrNull(
   value
 ) {
   const number =
-    typeof value === "number"
+    typeof value ===
+    "number"
       ? value
-      : Number(value);
+      : Number(
+          value
+        );
 
   if (
-    !Number.isFinite(number)
+    !Number.isFinite(
+      number
+    )
   ) {
     return null;
   }
@@ -2659,10 +2970,14 @@ function positiveIntegerOrNull(
   value
 ) {
   const number =
-    Number(value);
+    Number(
+      value
+    );
 
   if (
-    !Number.isInteger(number) ||
+    !Number.isInteger(
+      number
+    ) ||
     number <= 0
   ) {
     return null;
@@ -2726,7 +3041,9 @@ function extractResponseText(
     }
 
     return parts
-      .join("\n")
+      .join(
+        "\n"
+      )
       .trim();
   } catch (_) {
     return "";
@@ -2743,14 +3060,18 @@ function sendError(
   code,
   message
 ) {
-  return res.status(status).json({
-    ok: false,
+  return res
+    .status(
+      status
+    )
+    .json({
+      ok: false,
 
-    error: {
-      code,
-      message,
-    },
-  });
+      error: {
+        code,
+        message,
+      },
+    });
 }
 
 async function safeReadText(
