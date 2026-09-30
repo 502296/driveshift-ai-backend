@@ -2019,6 +2019,13 @@ function normalizeDiagnosis({
       ? String(raw.state)
       : "insufficient_evidence";
 
+  const assessmentClass =
+  VALID_ASSESSMENT_CLASSES.has(
+    String(raw.assessmentClass || "")
+  )
+    ? String(raw.assessmentClass)
+    : "uncertain";
+
   const summary =
     cleanLongText(
       raw.summary,
