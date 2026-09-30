@@ -689,6 +689,7 @@ export default async function handler(req, res) {
 function buildDiagnosticPrompt({
   language,
   cameraEvidence,
+  dashboardOperatingContext,
   vehicleProfile,
   allowedEvidenceIds,
   diagnosticEvidenceIds,
