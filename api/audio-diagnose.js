@@ -13,7 +13,10 @@ const HARMONIC_FUNDAMENTAL_ID =
 const HARMONICITY_ID =
   "HARM_HARMONICITY_SCORE";
 
-export default async function handler(req, res) {
+export default async function handler(
+  req,
+  res,
+) {
   if (req.method !== "POST") {
     return res.status(405).json({
       result: "Method not allowed",
@@ -34,23 +37,27 @@ export default async function handler(req, res) {
       vehicleProfile,
       audioFollowUpAnswers,
       audioEvidence,
+      audioAnalysisContext,
     } = req.body || {};
 
     const audioBase64 =
-      String(audio || "").trim();
+      String(
+        audio || "",
+      ).trim();
 
     const format =
       normalizeAudioFormat(
         audioFormat,
       );
 
-    /*
-     * Normalize and validate every evidence layer
-     * before it reaches diagnostic reasoning.
-     */
     const evidence =
       normalizeAudioEvidence(
         audioEvidence,
+      );
+
+    const analysisContext =
+      normalizeAudioAnalysisContext(
+        audioAnalysisContext,
       );
 
     const soundFocus =
@@ -69,12 +76,10 @@ export default async function handler(req, res) {
         buildInsufficientResult({
           lang,
           soundFocus,
-
           limitation:
             lang === "es"
               ? "No se recibió una grabación utilizable."
               : "No usable audio recording was received.",
-
           technicalDetails:
             buildTechnicalDetails(
               evidence,
@@ -91,12 +96,10 @@ export default async function handler(req, res) {
         buildInsufficientResult({
           lang,
           soundFocus,
-
           limitation:
             lang === "es"
               ? "El análisis directo requiere audio WAV o MP3."
               : "Direct audio analysis requires WAV or MP3 audio.",
-
           technicalDetails:
             buildTechnicalDetails(
               evidence,
@@ -116,12 +119,10 @@ export default async function handler(req, res) {
         buildInsufficientResult({
           lang,
           soundFocus,
-
           limitation:
             lang === "es"
               ? "La validación local marcó la grabación como no utilizable para interpretación acústica."
               : "Local validation marked the recording as unusable for acoustic interpretation.",
-
           technicalDetails:
             buildTechnicalDetails(
               evidence,
@@ -140,6 +141,7 @@ export default async function handler(req, res) {
         vehicleProfile,
         audioFollowUpAnswers,
         evidence,
+        analysisContext,
       });
 
     const raw =
@@ -172,12 +174,10 @@ export default async function handler(req, res) {
       res,
       buildInsufficientResult({
         lang,
-
         soundFocus:
           lang === "es"
             ? "No confirmado"
             : "Unconfirmed",
-
         limitation:
           lang === "es"
             ? "El análisis de audio no pudo completarse de forma verificable."
@@ -188,10 +188,6 @@ export default async function handler(req, res) {
   }
 }
 
-// ============================================================
-// Response
-// ============================================================
-
 function sendDiagnosis(
   res,
   diagnosis,
@@ -199,11 +195,6 @@ function sendDiagnosis(
 ) {
   return res.status(200).json({
     diagnosis,
-
-    /*
-     * Temporary compatibility channel for the old
-     * DriveShift audio response path.
-     */
     result:
       buildLegacyResult(
         diagnosis,
@@ -212,10 +203,6 @@ function sendDiagnosis(
   });
 }
 
-// ============================================================
-// Diagnostic prompt
-// ============================================================
-
 function buildPrompt({
   lang,
   soundFocus,
@@ -223,6 +210,7 @@ function buildPrompt({
   vehicleProfile,
   audioFollowUpAnswers,
   evidence,
+  analysisContext,
 }) {
   return `
 You are the diagnostic reasoning layer for DriveShift Audio Diagnostics.
@@ -233,8 +221,15 @@ ${lang === "es" ? "Spanish only." : "English only."}
 CAPTURE CONTEXT
 Sound focus: ${soundFocus}
 Recording duration: ${Number(durationSeconds || 0)} seconds
-Vehicle profile: ${safeJson(vehicleProfile)}
-Confirmed follow-up answers: ${safeJson(audioFollowUpAnswers)}
+
+VEHICLE CONFIGURATION CONTEXT
+${safeJson(vehicleProfile)}
+
+AUDIO ANALYSIS CONTEXT
+${analysisContext ? safeJson(analysisContext) : "None supplied."}
+
+CONFIRMED DIAGNOSTIC FOLLOW-UP ANSWERS
+${safeJson(audioFollowUpAnswers)}
 
 VERIFIED AUDIO EVIDENCE
 ${evidence ? safeJson(evidence) : "None supplied."}
@@ -242,311 +237,134 @@ ${evidence ? safeJson(evidence) : "None supplied."}
 EVIDENCE LAYERS
 
 1. MEASURED EVIDENCE
-
-Directly measured signal quantities such as:
-- RMS level
-- peak level
-- clipping ratio
-- zero-crossing rate
-- dominant frequency
-- spectral centroid
+Directly measured signal quantities such as RMS level, peak level, clipping ratio, zero-crossing rate, dominant frequency, and spectral centroid.
 
 2. OBSERVED EVIDENCE
-
-Acoustic descriptions derived from measured evidence.
-
-These describe signal behavior.
-They do NOT identify confirmed failed components.
+Acoustic descriptions derived from measured evidence. These describe signal behavior, not failed components.
 
 3. INFERRED ACOUSTIC EVIDENCE
+Mathematically derived structures such as estimated acoustic fundamental, harmonicity, and harmonic peaks.
 
-Mathematically derived acoustic structures such as:
-- estimated acoustic fundamental
-- harmonicity
-- harmonic peaks
-
-These are not direct sensor measurements.
-
-4. CONFIRMED USER CONTEXT
-
-Answers explicitly supplied by the user about operating behavior, for example:
-- noise changes with engine RPM
-- noise changes when A/C is switched on or off
-- noise changes with steering input
-- noise appears only cold or warm
-
-These answers may help separate hypotheses.
-
-They are NOT measured sensor evidence.
-
-5. DIAGNOSTIC HYPOTHESES
-
-Possible vehicle causes.
-
-These are never measurements and never confirmed failures without independent verification.
+4. DIAGNOSTIC HYPOTHESES
+Possible vehicle causes. These are never measurements and never confirmed failures without independent verification.
 
 GENERAL EVIDENCE CONTRACT
 
 - The original audio is acoustic input, not automatic proof of a failed component.
-
 - Capture location describes only where the phone was placed.
-
 - Preserve measured evidence names, values, units, IDs, and meaning.
-
-- Never invent frequencies.
-
-- Never invent dBFS values.
-
-- Never invent clipping values.
-
-- Never invent RPM.
-
-- Never invent rotational speed.
-
-- Never invent measurements.
-
-- Never invent evidence IDs.
-
-- Never invent RPM or speed correlations.
-
+- Never invent frequencies, dBFS values, clipping values, RPM, rotational speed, measurements, evidence IDs, or correlations.
 - Never convert an acoustic measurement into a confirmed failed part.
-
 - Entries marked "observed" are descriptions, not failures.
-
 - Entries marked "inferred" are derived evidence, not direct measurements.
-
-- User follow-up answers are confirmed user context, not measured sensor values.
-
 - Causes are diagnostic hypotheses only.
-
 - supportingEvidenceIds may contain only IDs actually supplied in VERIFIED AUDIO EVIDENCE.
-
 - Do not use HIGH confidence merely because a capture location was selected.
-
 - Do not recommend replacing a component from audio evidence alone.
-
 - Every cause must include a practical verification direction.
-
 - If the evidence cannot support a responsible diagnostic direction, return insufficient_evidence.
-
 - If one or two behavioral questions would materially separate plausible causes, return follow_up_required.
+
+ANALYSIS CONTEXT CONTRACT
+
+AUDIO ANALYSIS CONTEXT is external context supplied alongside the acoustic evidence.
+
+It is NOT part of VERIFIED AUDIO EVIDENCE.
+
+If operatingContext is present:
+
+- contextClass = user_confirmed means the values came from the user or capture workflow, not from a vehicle sensor.
+- engineOperatingState is user-confirmed context only.
+- vehicleMotionState is user-confirmed context only.
+- userReportedRpmBehavior is user-confirmed context only.
+- captureLocation describes where the phone was placed, not where the failed component is located.
+- NEVER convert captureLocation into proof of fault location.
+- NEVER describe userReportedRpmBehavior as measured RPM correlation.
+- NEVER describe user-reported engine-speed behavior as synchronized, order-tracked, sensor-verified, or OBD-verified.
+
+If rpmReference is present:
+
+- source = obd_measured may represent measured RPM only when quality = valid, rpm is a positive finite value, evidenceClass = measured, and supportsMeasuredRpmCorrelation = true.
+- source = user_confirmed is USER CONTEXT, not measured RPM evidence.
+- source = audio_estimated is INFERRED acoustic context, not measured RPM and not independent rotational evidence.
+- source = unavailable means NO RPM DATA.
+- NEVER rename audio_estimated RPM as OBD RPM, measured engine speed, crankshaft speed, or confirmed component speed.
+- NEVER promote user_confirmed RPM information into measured evidence.
+- NEVER treat a client-provided boolean as authoritative by itself. Use the normalized provenance fields supplied in AUDIO ANALYSIS CONTEXT.
+
+RPM LANGUAGE CONTRACT
+
+Unless AUDIO ANALYSIS CONTEXT contains a valid normalized rpmReference with source = obd_measured and supportsMeasuredRpmCorrelation = true:
+
+- Do NOT say "measured RPM correlation".
+- Do NOT say "RPM-synchronized".
+- Do NOT say "verified RPM relationship".
+- Do NOT say "sensor-confirmed RPM relationship".
+- Do NOT say "order-tracked" or "engine-order correlation".
+
+When the user reports that a sound changes with engine speed, say:
+
+- "The user reports that the sound changes with engine speed."
+- "User-confirmed behavior is consistent with an engine-speed-related pattern."
+
+Do NOT say:
+
+- "The audio is measured to correlate with RPM."
+- "The frequency tracks RPM."
+- "Order analysis confirms the source."
+
+A valid measured RPM reference only makes future RPM correlation or order tracking possible.
+It does NOT prove that order tracking was actually performed.
+
+UNKNOWN CONTEXT CONTRACT
+
+- If a context field is "unknown", keep it unknown.
+- Do not infer engine-running state from the sound alone.
+- Do not infer vehicle motion from the sound alone.
+- Do not infer RPM behavior from harmonic spacing alone.
+- Do not fill missing context with typical vehicle behavior.
 
 HARMONIC EVIDENCE CONTRACT
 
 If VERIFIED AUDIO EVIDENCE contains a "harmonics" object:
 
 - Harmonic evidence is mathematically derived acoustic evidence.
-
 - "Estimated acoustic fundamental" is an acoustic frequency estimate only.
-
-- NEVER rename estimated acoustic fundamental as:
-  - engine RPM
-  - crankshaft speed
-  - pulley speed
-  - bearing speed
-  - shaft speed
-  - component rotational speed
-
+- NEVER rename estimated acoustic fundamental as engine RPM, crankshaft speed, pulley speed, bearing speed, shaft speed, or component rotational speed.
 - NEVER calculate RPM simply by multiplying an acoustic fundamental by 60.
-
 - NEVER claim a specific engine order from harmonic evidence alone.
-
 - A future independent RPM/order-tracking layer is required before acoustic frequency can be associated with measured rotational speed.
-
 - Harmonicity score measures consistency of harmonic structure only.
-
-- Harmonicity score is NOT:
-  - diagnostic confidence
-  - failure probability
-  - severity
-  - component health
-
-- A harmonic peak's relativeDb is relative only to the strongest harmonic included in that detected harmonic pattern.
-
-- relativeDb is NOT dBFS.
-
-- relativeDb is NOT sound-pressure level.
-
-- Linear harmonic magnitude is NOT dBFS.
-
-- Harmonic evidence can support descriptions such as:
-  - periodic acoustic content
-  - harmonically structured acoustic content
-  - repeating spectral structure
-  - a sound consistent with a periodic mechanical process
-
-- Harmonic evidence BY ITSELF must NOT be used to attribute the sound to:
-  - the accessory drive
-  - alternator
-  - A/C compressor
-  - power-steering pump
-  - water pump
-  - tensioner
-  - pulley
-  - bearing
-  - crankshaft
-  - camshaft
-  - transmission
-  - wheel bearing
-  - exhaust component
-  - or any other specific physical component or subsystem
-
-- A specific component or subsystem attribution requires independent supporting context in addition to harmonic evidence.
-
-- Independent supporting context may include:
-  - non-harmonic measured evidence
-  - non-harmonic acoustic observations
-  - confirmed user operating-condition answers
-  - verified vehicle configuration
-  - future verified OBD/RPM/order evidence
-
-- When explaining a hypothesis, make the provenance clear.
-
-- Do not write wording that implies:
-  "harmonics prove this is an accessory-drive component."
-
-- Prefer wording such as:
-  "The harmonic structure supports a periodic acoustic source. Combined with the confirmed change under accessory load, an accessory-drive source becomes a plausible hypothesis."
-
-- Harmonic evidence alone cannot identify the physical vehicle component producing the sound.
-
+- Harmonicity score is NOT diagnostic confidence, failure probability, severity, or component health.
+- A harmonic peak's relativeDb is relative only to the strongest harmonic in that detected pattern.
+- relativeDb is NOT dBFS and is NOT sound-pressure level.
+- Linear harmonic magnitude is not dBFS.
+- Harmonic spacing can support the description "periodic or harmonically structured acoustic content."
+- Harmonic evidence alone cannot identify the physical component producing the sound.
 - Harmonic evidence alone cannot justify HIGH diagnostic confidence.
-
-- If harmonic evidence is insufficient_evidence or unavailable, do not use it diagnostically.
-
-- Do not invent missing harmonic peaks.
-
-- Do not invent missing harmonic orders.
-
-VEHICLE CONFIGURATION CONTRACT
-
-- Never assume that a vehicle contains a specific component merely because that component is common on some vehicles.
-
-- Vehicle year, make, and model alone do not automatically prove the presence of every optional or configuration-dependent component.
-
-- Before naming a configuration-dependent component as a cause, verify that its presence is supported by the supplied vehicle profile or other explicit evidence.
-
-- Examples of configuration-dependent components include:
-  - hydraulic power-steering pump
-  - electric power-steering hardware
-  - belt-driven water pump
-  - electric water pump
-  - mechanically driven cooling fan
-  - turbocharger
-  - supercharger
-  - selectable transfer-case hardware
-  - specific hybrid accessories
-
-- If the vehicle configuration does not establish that a component exists, do NOT present that component as a primary named cause.
-
-- Instead use the narrowest valid generic category.
-
-Examples:
-
-Instead of:
-"Power steering pump bearing noise"
-
-when the steering system type is unknown, use:
-"Belt-driven accessory or pulley noise"
-
-Instead of:
-"Mechanical water-pump bearing"
-
-when pump type is unknown, use:
-"Accessory-drive rotating component"
-
-- "If equipped" wording may be used when a configuration-dependent component is genuinely relevant but its presence is not verified.
-
-- Do not fabricate vehicle configuration details.
-
-- Do not infer component presence solely from the acoustic recording.
-
-- The diagnostic report must never recommend inspecting or replacing a component that may not exist on the vehicle without clearly acknowledging the configuration uncertainty.
-
-COMPONENT ATTRIBUTION CONTRACT
-
-- Separate acoustic characterization from physical-source attribution.
-
-First ask:
-"What does the signal show?"
-
-Examples:
-- high-frequency weighted content
-- periodic structure
-- harmonic pattern
-- impulsive behavior
-- broadband noise
-
-Then ask:
-"What independent evidence changes with vehicle operation?"
-
-Examples:
-- RPM behavior
-- A/C engagement
-- accessory electrical load
-- steering input
-- vehicle speed
-- braking
-- cold/warm condition
-
-Only after combining those layers may you form a physical-source hypothesis.
-
-BAD reasoning:
-"Harmonics are present, therefore the alternator bearing is noisy."
-
-GOOD reasoning:
-"The recording contains harmonically structured acoustic content. The user also reports that the noise changes with accessory load. A belt-driven accessory is therefore a plausible source, but the individual component remains unconfirmed."
+- Harmonic evidence may strengthen or weaken a hypothesis only when combined with independent context such as verified measured signals, sound behavior, operating-condition answers, or later RPM/order evidence.
+- If harmonic evidence is insufficientEvidence or unavailable, do not use it diagnostically.
+- Do not invent missing harmonic peaks or missing harmonic orders.
 
 FOLLOW-UP QUESTION CONTRACT
 
 - Ask no more than two questions.
-
 - Ask only questions that materially separate plausible causes.
-
 - Questions must be answerable by a normal vehicle owner without specialized equipment.
-
 - Do not force certainty.
-
 - Every follow-up question must permit the user to answer "Not sure" or the Spanish equivalent.
-
 - A user answer is confirmed user context, not a measured sensor value.
-
-- Never describe a user-reported RPM range as measured RPM unless RPM came from a verified sensor or OBD evidence source.
-
-- Prefer operating-condition questions that directly separate hypotheses.
-
-- Do not ask for a component-specific behavior if the vehicle may not contain that component unless the question explicitly says "if equipped."
+- Never describe a user-reported RPM range as measured RPM unless RPM came from a verified sensor/OBD evidence source.
 
 SAFETY CONTRACT
 
 - Do not instruct a general user to touch, manually rotate, reach toward, or place tools near moving belts, pulleys, fans, shafts, or other rotating components while the engine is running.
-
-- Do not instruct a general user to place a mechanic's stethoscope or another physical probe near moving engine components while the engine is running.
-
-- If engine-running localization near rotating components would normally require a technician procedure, recommend inspection by a qualified technician using appropriate diagnostic methods.
-
-- Visual inspection of belts, pulleys, wiring, hoses, and similar engine-bay components must be described as engine-off unless the task specifically and safely requires otherwise.
-
+- Do not instruct a general user to place a mechanic's stethoscope or other physical probe near moving engine components while the engine is running.
+- If engine-running localization near rotating components would normally require a technician procedure, recommend inspection by a qualified technician using appropriate approved diagnostic methods.
+- Visual inspection of belts, pulleys, wiring, hoses, and similar engine-bay components must be described as engine-off unless the task specifically requires otherwise.
 - Keep safety guidance proportional and concise.
 
-REPORT WRITING CONTRACT
-
-- Keep measured facts separate from interpretation.
-
-- Use "shows", "measured", or "recorded" only for actual evidence.
-
-- Use "suggests", "supports", "consistent with", "plausible", or "may" for hypotheses.
-
-- Do not write that acoustic structure "indicates" a particular component unless independent evidence supports that attribution.
-
-- Do not imply that a component is confirmed because its behavior is acoustically plausible.
-
-- When several component-specific causes cannot be distinguished responsibly, prefer one broader cause category rather than creating a list of speculative parts.
-
-- Prefer fewer well-supported causes over more weakly supported causes.
-
 Return ONE JSON object only.
-
 No markdown.
 No code fences.
 No text before or after the JSON.
@@ -587,16 +405,10 @@ Use exactly this structure:
 }
 
 Use 1-3 causes for complete results.
-
 Use no more than 2 follow-up questions.
-
 Keep the report concise, technical, calm, and evidence-driven.
 `;
 }
-
-// ============================================================
-// OpenAI direct audio
-// ============================================================
 
 async function requestDirectAudioDiagnosis({
   prompt,
@@ -630,6 +442,7 @@ async function requestDirectAudioDiagnosis({
                 content:
                   "You are DriveShift's evidence-constrained automotive audio diagnostic engine. Strictly separate measured evidence, observations, inferred acoustic evidence, diagnostic hypotheses, and verification. Never invent measurements, RPM relationships, rotational correlations, or confirmed failures.",
               },
+
               {
                 role:
                   "user",
@@ -642,6 +455,7 @@ async function requestDirectAudioDiagnosis({
                     text:
                       prompt,
                   },
+
                   {
                     type:
                       "input_audio",
@@ -685,10 +499,15 @@ async function requestDirectAudioDiagnosis({
     await response.json();
 
   const content =
-    data?.choices?.[0]?.message?.content;
+    data
+      ?.choices
+      ?.[0]
+      ?.message
+      ?.content;
 
   const text =
-    typeof content === "string"
+    typeof content ===
+    "string"
       ? content.trim()
       : "";
 
@@ -702,10 +521,6 @@ async function requestDirectAudioDiagnosis({
     text,
   );
 }
-
-// ============================================================
-// Diagnosis normalization
-// ============================================================
 
 function normalizeDiagnosis({
   raw,
@@ -736,7 +551,8 @@ function normalizeDiagnosis({
             (item) => {
               const supportingEvidenceIds =
                 normalizeStringArray(
-                  item?.supportingEvidenceIds,
+                  item
+                    ?.supportingEvidenceIds,
                   12,
                 ).filter(
                   (id) =>
@@ -754,14 +570,16 @@ function normalizeDiagnosis({
 
                 description:
                   cleanText(
-                    item?.description,
+                    item
+                      ?.description,
                     500,
                   ),
 
                 confidence:
                   normalizeCauseConfidence({
                     value:
-                      item?.confidence,
+                      item
+                        ?.confidence,
 
                     supportingEvidenceIds,
                   }),
@@ -770,7 +588,8 @@ function normalizeDiagnosis({
 
                 verification:
                   cleanText(
-                    item?.verification,
+                    item
+                      ?.verification,
                     500,
                   ),
               };
@@ -795,19 +614,15 @@ function normalizeDiagnosis({
             (item) => ({
               question:
                 cleanText(
-                  item?.question,
+                  item
+                    ?.question,
                   260,
                 ),
 
-              /*
-               * The backend enforces an uncertainty option.
-               *
-               * The user must never be forced to invent
-               * an observation.
-               */
               options:
                 normalizeFollowUpOptions(
-                  item?.options,
+                  item
+                    ?.options,
                   lang,
                 ),
             }),
@@ -815,7 +630,8 @@ function normalizeDiagnosis({
           .filter(
             (item) =>
               item.question &&
-              item.options.length >= 2,
+              item.options.length >=
+                2,
           )
       : [];
 
@@ -826,7 +642,8 @@ function normalizeDiagnosis({
     );
 
   if (
-    status === "complete" &&
+    status ===
+      "complete" &&
     causes.length === 0
   ) {
     status =
@@ -836,7 +653,8 @@ function normalizeDiagnosis({
   if (
     status ===
       "follow_up_required" &&
-    followUpQuestions.length === 0
+    followUpQuestions.length ===
+      0
   ) {
     status =
       "insufficient_evidence";
@@ -849,12 +667,14 @@ function normalizeDiagnosis({
 
     directionConfidence:
       normalizeConfidence(
-        raw?.directionConfidence,
+        raw
+          ?.directionConfidence,
       ),
 
     diagnosticTitle:
       cleanText(
-        raw?.diagnosticTitle,
+        raw
+          ?.diagnosticTitle,
         180,
       ) ||
       defaultTitle(
@@ -864,7 +684,8 @@ function normalizeDiagnosis({
 
     diagnosticSummary:
       cleanText(
-        raw?.diagnosticSummary,
+        raw
+          ?.diagnosticSummary,
         700,
       ) ||
       defaultSummary(
@@ -873,13 +694,15 @@ function normalizeDiagnosis({
       ),
 
     causes:
-      status === "complete"
+      status ===
+      "complete"
         ? causes
         : [],
 
     nextStepTitle:
       cleanText(
-        raw?.nextStepTitle,
+        raw
+          ?.nextStepTitle,
         180,
       ) ||
       (
@@ -890,7 +713,8 @@ function normalizeDiagnosis({
 
     nextStepBody:
       cleanText(
-        raw?.nextStepBody,
+        raw
+          ?.nextStepBody,
         700,
       ) ||
       (
@@ -901,7 +725,8 @@ function normalizeDiagnosis({
 
     doNotReplaceTitle:
       cleanText(
-        raw?.doNotReplaceTitle,
+        raw
+          ?.doNotReplaceTitle,
         180,
       ) ||
       (
@@ -912,7 +737,8 @@ function normalizeDiagnosis({
 
     doNotReplaceBody:
       cleanText(
-        raw?.doNotReplaceBody,
+        raw
+          ?.doNotReplaceBody,
         700,
       ) ||
       (
@@ -929,7 +755,7 @@ function normalizeDiagnosis({
 
     followUpQuestions:
       status ===
-        "follow_up_required"
+      "follow_up_required"
         ? followUpQuestions
         : [],
 
@@ -937,10 +763,6 @@ function normalizeDiagnosis({
   };
 }
 
-/*
- * HIGH cause confidence must never be produced from
- * harmonic evidence alone.
- */
 function normalizeCauseConfidence({
   value,
   supportingEvidenceIds,
@@ -951,13 +773,15 @@ function normalizeCauseConfidence({
     );
 
   if (
-    confidence !== "high"
+    confidence !==
+    "high"
   ) {
     return confidence;
   }
 
   if (
-    supportingEvidenceIds.length === 0
+    supportingEvidenceIds.length ===
+    0
   ) {
     return "medium";
   }
@@ -979,17 +803,280 @@ function normalizeCauseConfidence({
   return confidence;
 }
 
-// ============================================================
-// Audio evidence normalization
-// ============================================================
+function normalizeAudioAnalysisContext(
+  value,
+) {
+  if (
+    !value ||
+    typeof value !==
+      "object" ||
+    Array.isArray(
+      value,
+    )
+  ) {
+    return null;
+  }
+
+  const rawOperatingContext =
+    value.operatingContext &&
+    typeof value.operatingContext ===
+      "object" &&
+    !Array.isArray(
+      value.operatingContext,
+    )
+      ? value.operatingContext
+      : null;
+
+  const rawRpmReference =
+    value.rpmReference &&
+    typeof value.rpmReference ===
+      "object" &&
+    !Array.isArray(
+      value.rpmReference,
+    )
+      ? value.rpmReference
+      : null;
+
+  let operatingContext =
+    null;
+
+  if (rawOperatingContext) {
+    const engineOperatingState =
+      normalizeEnumValue(
+        rawOperatingContext
+          .engineOperatingState,
+
+        new Set([
+          "engine_running",
+          "cranking",
+          "ignition_on_engine_off",
+          "engine_off",
+          "unknown",
+        ]),
+
+        "unknown",
+      );
+
+    const vehicleMotionState =
+      normalizeEnumValue(
+        rawOperatingContext
+          .vehicleMotionState,
+
+        new Set([
+          "stationary",
+          "moving",
+          "unknown",
+        ]),
+
+        "unknown",
+      );
+
+    const userReportedRpmBehavior =
+      normalizeEnumValue(
+        rawOperatingContext
+          .userReportedRpmBehavior,
+
+        new Set([
+          "increases_with_rpm",
+          "decreases_with_rpm",
+          "changes_with_rpm",
+          "no_clear_relation",
+          "idle_only",
+          "unknown",
+        ]),
+
+        "unknown",
+      );
+
+    const captureLocation =
+      normalizeEnumValue(
+        rawOperatingContext
+          .captureLocation,
+
+        new Set([
+          "engine_bay",
+          "cabin",
+          "exhaust_area",
+          "wheel_area",
+          "underbody",
+          "exterior",
+          "unknown",
+        ]),
+
+        "unknown",
+      );
+
+    operatingContext = {
+      contract:
+        "audio_user_operating_context_v1",
+
+      contextClass:
+        "user_confirmed",
+
+      evidenceClass:
+        "user_confirmed",
+
+      engineOperatingState,
+
+      vehicleMotionState,
+
+      userReportedRpmBehavior,
+
+      captureLocation,
+
+      /*
+       * Server-authoritative values.
+       *
+       * User context can never become measured RPM
+       * correlation or measured order tracking.
+       */
+      supportsMeasuredRpmCorrelation:
+        false,
+
+      supportsMeasuredOrderTracking:
+        false,
+    };
+  }
+
+  let rpmReference =
+    null;
+
+  if (rawRpmReference) {
+    const source =
+      normalizeEnumValue(
+        rawRpmReference.source,
+
+        new Set([
+          "obd_measured",
+          "user_confirmed",
+          "audio_estimated",
+          "unavailable",
+        ]),
+
+        "unavailable",
+      );
+
+    const quality =
+      normalizeEnumValue(
+        rawRpmReference.quality,
+
+        new Set([
+          "valid",
+          "partial",
+          "unavailable",
+        ]),
+
+        "unavailable",
+      );
+
+    const rawRpm =
+      normalizeNumber(
+        rawRpmReference.rpm,
+      );
+
+    const rpm =
+      rawRpm !== null &&
+      rawRpm >= 0
+        ? rawRpm
+        : null;
+
+    const evidenceClass =
+      source ===
+      "obd_measured"
+        ? "measured"
+        : source ===
+          "user_confirmed"
+          ? "user_confirmed"
+          : source ===
+            "audio_estimated"
+            ? "inferred"
+            : "no_data";
+
+    const supportsMeasuredRpmCorrelation =
+      source ===
+        "obd_measured" &&
+      quality ===
+        "valid" &&
+      rpm !==
+        null &&
+      rpm >
+        0;
+
+    /*
+     * A measured RPM reference can SUPPORT future order
+     * tracking, but does not mean order tracking has been
+     * performed.
+     */
+    const supportsIndependentOrderTracking =
+      supportsMeasuredRpmCorrelation;
+
+    rpmReference = {
+      contract:
+        "audio_rpm_reference_v1",
+
+      source,
+
+      evidenceClass,
+
+      quality,
+
+      ...(rpm !== null
+        ? {
+            rpm,
+          }
+        : {}),
+
+      supportsMeasuredRpmCorrelation,
+
+      supportsIndependentOrderTracking,
+    };
+  }
+
+  if (
+    !operatingContext &&
+    !rpmReference
+  ) {
+    return null;
+  }
+
+  return {
+    contract:
+      "audio_analysis_context_v1",
+
+    ...(operatingContext
+      ? {
+          operatingContext,
+        }
+      : {}),
+
+    ...(rpmReference
+      ? {
+          rpmReference,
+        }
+      : {}),
+
+    hasMeasuredRpmReference:
+      rpmReference
+        ?.supportsMeasuredRpmCorrelation ===
+      true,
+
+    supportsIndependentOrderTracking:
+      rpmReference
+        ?.supportsIndependentOrderTracking ===
+      true,
+  };
+}
 
 function normalizeAudioEvidence(
   value,
 ) {
   if (
     !value ||
-    typeof value !== "object" ||
-    Array.isArray(value)
+    typeof value !==
+      "object" ||
+    Array.isArray(
+      value,
+    )
   ) {
     return null;
   }
@@ -999,10 +1086,6 @@ function normalizeAudioEvidence(
 
   const quality =
     value.quality || {};
-
-  // ----------------------------------------------------------
-  // Measured signals
-  // ----------------------------------------------------------
 
   const signals =
     Array.isArray(
@@ -1023,35 +1106,41 @@ function normalizeAudioEvidence(
 
               name:
                 cleanText(
-                  item?.name,
+                  item
+                    ?.name,
                   160,
                 ),
 
               numericValue:
                 normalizeNumber(
-                  item?.numericValue,
+                  item
+                    ?.numericValue,
                 ),
 
               displayValue:
                 cleanText(
-                  item?.displayValue,
+                  item
+                    ?.displayValue,
                   160,
                 ),
 
               unit:
                 cleanText(
-                  item?.unit,
+                  item
+                    ?.unit,
                   40,
                 ),
 
               status:
                 normalizeEvidenceStatus(
-                  item?.status,
+                  item
+                    ?.status,
                 ),
 
               source:
                 cleanText(
-                  item?.source,
+                  item
+                    ?.source,
                   120,
                 ),
             }),
@@ -1069,12 +1158,10 @@ function normalizeAudioEvidence(
           (item) =>
             item.id,
         )
-        .filter(Boolean),
+        .filter(
+          Boolean,
+        ),
     );
-
-  // ----------------------------------------------------------
-  // Acoustic observations
-  // ----------------------------------------------------------
 
   const observations =
     Array.isArray(
@@ -1095,24 +1182,28 @@ function normalizeAudioEvidence(
 
               label:
                 cleanText(
-                  item?.label,
+                  item
+                    ?.label,
                   180,
                 ),
 
               description:
                 cleanText(
-                  item?.description,
+                  item
+                    ?.description,
                   500,
                 ),
 
               status:
                 normalizeEvidenceStatus(
-                  item?.status,
+                  item
+                    ?.status,
                 ),
 
               supportingSignalIds:
                 normalizeStringArray(
-                  item?.supportingSignalIds,
+                  item
+                    ?.supportingSignalIds,
                   16,
                 ).filter(
                   (id) =>
@@ -1135,13 +1226,11 @@ function normalizeAudioEvidence(
           (item) =>
             item.id,
         )
-        .filter(Boolean),
+        .filter(
+          Boolean,
+        ),
     );
 
-  /*
-   * Harmonic evidence can reference only existing
-   * base evidence IDs.
-   */
   const baseEvidenceIds =
     new Set([
       ...signalIds,
@@ -1161,28 +1250,33 @@ function normalizeAudioEvidence(
     recording: {
       sourceZone:
         cleanText(
-          recording.sourceZone,
+          recording
+            .sourceZone,
           80,
         ),
 
       durationMilliseconds:
         normalizeNumber(
-          recording.durationMilliseconds,
+          recording
+            .durationMilliseconds,
         ),
 
       sampleRateHz:
         normalizeNumber(
-          recording.sampleRateHz,
+          recording
+            .sampleRateHz,
         ),
 
       channelCount:
         normalizeNumber(
-          recording.channelCount,
+          recording
+            .channelCount,
         ),
 
       format:
         cleanText(
-          recording.format,
+          recording
+            .format,
           30,
         ),
     },
@@ -1190,27 +1284,32 @@ function normalizeAudioEvidence(
     quality: {
       state:
         normalizeQualityState(
-          quality.state,
+          quality
+            .state,
         ),
 
       signalLevel:
         normalizeNumber(
-          quality.signalLevel,
+          quality
+            .signalLevel,
         ),
 
       clippingRatio:
         normalizeNumber(
-          quality.clippingRatio,
+          quality
+            .clippingRatio,
         ),
 
       noiseRatio:
         normalizeNumber(
-          quality.noiseRatio,
+          quality
+            .noiseRatio,
         ),
 
       limitations:
         normalizeStringArray(
-          quality.limitations,
+          quality
+            .limitations,
           10,
         ),
     },
@@ -1219,9 +1318,6 @@ function normalizeAudioEvidence(
 
     observations,
 
-    /*
-     * Invalid / absent harmonic data is omitted.
-     */
     ...(harmonics
       ? {
           harmonics,
@@ -1230,15 +1326,12 @@ function normalizeAudioEvidence(
 
     capturedAt:
       cleanText(
-        value.capturedAt,
+        value
+          .capturedAt,
         80,
       ),
   };
 }
-
-// ============================================================
-// Harmonic evidence normalization
-// ============================================================
 
 function normalizeHarmonicEvidence({
   value,
@@ -1246,8 +1339,11 @@ function normalizeHarmonicEvidence({
 }) {
   if (
     !value ||
-    typeof value !== "object" ||
-    Array.isArray(value)
+    typeof value !==
+      "object" ||
+    Array.isArray(
+      value,
+    )
   ) {
     return null;
   }
@@ -1269,10 +1365,6 @@ function normalizeHarmonicEvidence({
       12,
     );
 
-  /*
-   * Unknown implementations are not allowed to
-   * masquerade as DriveShift Harmonic V1 evidence.
-   */
   if (
     source !==
     HARMONIC_SOURCE_ID
@@ -1293,8 +1385,7 @@ function normalizeHarmonicEvidence({
       detectedHarmonicCount:
         0,
 
-      peaks:
-        [],
+      peaks: [],
 
       limitations: [
         ...limitations,
@@ -1306,12 +1397,9 @@ function normalizeHarmonicEvidence({
     };
   }
 
-  /*
-   * Insufficient / unavailable evidence must not carry
-   * stale acoustic values into reasoning.
-   */
   if (
-    state !== "available"
+    state !==
+    "available"
   ) {
     return {
       state,
@@ -1328,8 +1416,7 @@ function normalizeHarmonicEvidence({
       detectedHarmonicCount:
         0,
 
-      peaks:
-        [],
+      peaks: [],
 
       limitations,
     };
@@ -1338,7 +1425,8 @@ function normalizeHarmonicEvidence({
   const fundamental =
     normalizeHarmonicScalar({
       value:
-        value.estimatedFundamental,
+        value
+          .estimatedFundamental,
 
       expectedId:
         HARMONIC_FUNDAMENTAL_ID,
@@ -1355,7 +1443,8 @@ function normalizeHarmonicEvidence({
   const harmonicity =
     normalizeHarmonicScalar({
       value:
-        value.harmonicity,
+        value
+          .harmonicity,
 
       expectedId:
         HARMONICITY_ID,
@@ -1387,13 +1476,11 @@ function normalizeHarmonicEvidence({
                 allowedSupportingIds,
               }),
           )
-          .filter(Boolean)
+          .filter(
+            Boolean,
+          )
       : [];
 
-  /*
-   * Repeat app-side protection at the backend
-   * trust boundary.
-   */
   if (
     !fundamental ||
     !harmonicity ||
@@ -1415,8 +1502,7 @@ function normalizeHarmonicEvidence({
       detectedHarmonicCount:
         0,
 
-      peaks:
-        [],
+      peaks: [],
 
       limitations: [
         ...limitations,
@@ -1440,9 +1526,6 @@ function normalizeHarmonicEvidence({
 
     harmonicity,
 
-    /*
-     * Never trust a client-supplied count.
-     */
     detectedHarmonicCount:
       peaks.length,
 
@@ -1451,10 +1534,6 @@ function normalizeHarmonicEvidence({
     limitations,
   };
 }
-
-// ============================================================
-// Harmonic scalar normalization
-// ============================================================
 
 function normalizeHarmonicScalar({
   value,
@@ -1465,8 +1544,11 @@ function normalizeHarmonicScalar({
 }) {
   if (
     !value ||
-    typeof value !== "object" ||
-    Array.isArray(value)
+    typeof value !==
+      "object" ||
+    Array.isArray(
+      value,
+    )
   ) {
     return null;
   }
@@ -1478,18 +1560,21 @@ function normalizeHarmonicScalar({
     );
 
   if (
-    id !== expectedId
+    id !==
+    expectedId
   ) {
     return null;
   }
 
   const numericValue =
     normalizeNumber(
-      value.numericValue,
+      value
+        .numericValue,
     );
 
   if (
-    numericValue === null
+    numericValue ===
+    null
   ) {
     return null;
   }
@@ -1513,11 +1598,9 @@ function normalizeHarmonicScalar({
       value.status,
     );
 
-  /*
-   * Harmonic scalar evidence must remain inferred.
-   */
   if (
-    status !== "inferred"
+    status !==
+    "inferred"
   ) {
     return null;
   }
@@ -1548,7 +1631,8 @@ function normalizeHarmonicScalar({
 
     displayValue:
       cleanText(
-        value.displayValue,
+        value
+          .displayValue,
         120,
       ),
 
@@ -1566,13 +1650,15 @@ function normalizeHarmonicScalar({
 
     derivation:
       cleanText(
-        value.derivation,
+        value
+          .derivation,
         500,
       ),
 
     supportingEvidenceIds:
       normalizeStringArray(
-        value.supportingEvidenceIds,
+        value
+          .supportingEvidenceIds,
         16,
       ).filter(
         (id) =>
@@ -1583,15 +1669,12 @@ function normalizeHarmonicScalar({
 
     limitations:
       normalizeStringArray(
-        value.limitations,
+        value
+          .limitations,
         10,
       ),
   };
 }
-
-// ============================================================
-// Harmonic peak normalization
-// ============================================================
 
 function normalizeHarmonicPeak({
   value,
@@ -1599,8 +1682,11 @@ function normalizeHarmonicPeak({
 }) {
   if (
     !value ||
-    typeof value !== "object" ||
-    Array.isArray(value)
+    typeof value !==
+      "object" ||
+    Array.isArray(
+      value,
+    )
   ) {
     return null;
   }
@@ -1621,45 +1707,56 @@ function normalizeHarmonicPeak({
 
   const harmonicNumber =
     normalizeInteger(
-      value.harmonicNumber,
+      value
+        .harmonicNumber,
     );
 
   const expectedFrequencyHz =
     normalizeNumber(
-      value.expectedFrequencyHz,
+      value
+        .expectedFrequencyHz,
     );
 
   const detectedFrequencyHz =
     normalizeNumber(
-      value.detectedFrequencyHz,
+      value
+        .detectedFrequencyHz,
     );
 
   const magnitude =
     normalizeNumber(
-      value.magnitude,
+      value
+        .magnitude,
     );
 
   const relativeDb =
     normalizeNumber(
-      value.relativeDb,
+      value
+        .relativeDb,
     );
 
   const frequencyDeviationHz =
     normalizeNumber(
-      value.frequencyDeviationHz,
+      value
+        .frequencyDeviationHz,
     );
 
   if (
     harmonicNumber === null ||
     harmonicNumber <= 0 ||
-    expectedFrequencyHz === null ||
+    expectedFrequencyHz ===
+      null ||
     expectedFrequencyHz <= 0 ||
-    detectedFrequencyHz === null ||
+    detectedFrequencyHz ===
+      null ||
     detectedFrequencyHz <= 0 ||
-    magnitude === null ||
+    magnitude ===
+      null ||
     magnitude < 0 ||
-    relativeDb === null ||
-    frequencyDeviationHz === null ||
+    relativeDb ===
+      null ||
+    frequencyDeviationHz ===
+      null ||
     frequencyDeviationHz < 0
   ) {
     return null;
@@ -1674,7 +1771,8 @@ function normalizeHarmonicPeak({
     )}`;
 
   if (
-    id !== expectedId
+    id !==
+    expectedId
   ) {
     return null;
   }
@@ -1685,7 +1783,8 @@ function normalizeHarmonicPeak({
     );
 
   if (
-    status !== "inferred"
+    status !==
+    "inferred"
   ) {
     return null;
   }
@@ -1712,16 +1811,8 @@ function normalizeHarmonicPeak({
 
     detectedFrequencyHz,
 
-    /*
-     * Linear spectrum magnitude.
-     * NOT dBFS.
-     */
     magnitude,
 
-    /*
-     * Relative only to the strongest harmonic
-     * within this pattern.
-     */
     relativeDb,
 
     frequencyDeviationHz,
@@ -1734,13 +1825,15 @@ function normalizeHarmonicPeak({
 
     derivation:
       cleanText(
-        value.derivation,
+        value
+          .derivation,
         500,
       ),
 
     supportingEvidenceIds:
       normalizeStringArray(
-        value.supportingEvidenceIds,
+        value
+          .supportingEvidenceIds,
         16,
       ).filter(
         (supportingId) =>
@@ -1751,15 +1844,12 @@ function normalizeHarmonicPeak({
 
     limitations:
       normalizeStringArray(
-        value.limitations,
+        value
+          .limitations,
         10,
       ),
   };
 }
-
-// ============================================================
-// Technical details
-// ============================================================
 
 function buildTechnicalDetails(
   evidence,
@@ -1769,11 +1859,12 @@ function buildTechnicalDetails(
     return [];
   }
 
-  const details =
-    [];
+  const details = [];
 
   if (
-    evidence.quality?.state
+    evidence
+      .quality
+      ?.state
   ) {
     details.push({
       label:
@@ -1782,7 +1873,9 @@ function buildTechnicalDetails(
           : "Recording quality",
 
       value:
-        evidence.quality.state,
+        evidence
+          .quality
+          .state,
     });
   }
 
@@ -1791,7 +1884,8 @@ function buildTechnicalDetails(
     of evidence.signals || []
   ) {
     if (
-      signal.status !== "measured"
+      signal.status !==
+      "measured"
     ) {
       continue;
     }
@@ -1812,14 +1906,10 @@ function buildTechnicalDetails(
     });
   }
 
-  /*
-   * Harmonic quantities are displayed only as
-   * derived acoustic data.
-   *
-   * Nothing here is called RPM or component speed.
-   */
   if (
-    evidence.harmonics?.state ===
+    evidence
+      .harmonics
+      ?.state ===
     "available"
   ) {
     const fundamental =
@@ -1833,7 +1923,8 @@ function buildTechnicalDetails(
         .harmonicity;
 
     if (
-      fundamental?.displayValue
+      fundamental
+        ?.displayValue
     ) {
       details.push({
         label:
@@ -1842,12 +1933,14 @@ function buildTechnicalDetails(
             : "Estimated acoustic fundamental",
 
         value:
-          fundamental.displayValue,
+          fundamental
+            .displayValue,
       });
     }
 
     if (
-      harmonicity?.displayValue
+      harmonicity
+        ?.displayValue
     ) {
       details.push({
         label:
@@ -1856,7 +1949,8 @@ function buildTechnicalDetails(
             : "Acoustic harmonicity score",
 
         value:
-          harmonicity.displayValue,
+          harmonicity
+            .displayValue,
       });
     }
 
@@ -1882,10 +1976,6 @@ function buildTechnicalDetails(
   );
 }
 
-// ============================================================
-// Evidence ID registry
-// ============================================================
-
 function collectEvidenceIds(
   evidence,
 ) {
@@ -1894,7 +1984,8 @@ function collectEvidenceIds(
 
   for (
     const item
-    of evidence?.signals || []
+    of evidence
+      ?.signals || []
   ) {
     if (item.id) {
       ids.add(
@@ -1905,7 +1996,8 @@ function collectEvidenceIds(
 
   for (
     const item
-    of evidence?.observations || []
+    of evidence
+      ?.observations || []
   ) {
     if (item.id) {
       ids.add(
@@ -1915,7 +2007,9 @@ function collectEvidenceIds(
   }
 
   if (
-    evidence?.harmonics?.state ===
+    evidence
+      ?.harmonics
+      ?.state ===
     "available"
   ) {
     const fundamental =
@@ -1929,7 +2023,8 @@ function collectEvidenceIds(
         .harmonicity;
 
     if (
-      fundamental?.id
+      fundamental
+        ?.id
     ) {
       ids.add(
         fundamental.id,
@@ -1937,7 +2032,8 @@ function collectEvidenceIds(
     }
 
     if (
-      harmonicity?.id
+      harmonicity
+        ?.id
     ) {
       ids.add(
         harmonicity.id,
@@ -1970,14 +2066,12 @@ function isHarmonicEvidenceId(
     id ===
       HARMONICITY_ID ||
     /^HARM_PEAK_\d{2}$/.test(
-      String(id || ""),
+      String(
+        id || "",
+      ),
     )
   );
 }
-
-// ============================================================
-// Sound focus
-// ============================================================
 
 function resolveSoundFocus({
   lang,
@@ -1993,7 +2087,8 @@ function resolveSoundFocus({
     ).toLowerCase();
 
   if (
-    zone === "enginebay"
+    zone ===
+    "enginebay"
   ) {
     return lang === "es"
       ? "Área del motor"
@@ -2001,7 +2096,8 @@ function resolveSoundFocus({
   }
 
   if (
-    zone === "wheelarea"
+    zone ===
+    "wheelarea"
   ) {
     return lang === "es"
       ? "Área de rueda"
@@ -2073,10 +2169,6 @@ function resolveSoundFocus({
     : "Unconfirmed";
 }
 
-// ============================================================
-// Insufficient evidence
-// ============================================================
-
 function buildInsufficientResult({
   lang,
   soundFocus,
@@ -2102,8 +2194,7 @@ function buildInsufficientResult({
         ? "La evidencia disponible no permite una dirección diagnóstica responsable sin adivinar."
         : "The available evidence does not support a responsible diagnostic direction without guessing.",
 
-    causes:
-      [],
+    causes: [],
 
     nextStepTitle:
       lang === "es"
@@ -2139,10 +2230,6 @@ function buildInsufficientResult({
   };
 }
 
-// ============================================================
-// Legacy compatibility
-// ============================================================
-
 function buildLegacyResult(
   diagnosis,
   lang,
@@ -2155,10 +2242,12 @@ function buildLegacyResult(
       "Diagnosis status: audio_follow_up",
       "",
       "Voice summary:",
-      diagnosis.diagnosticSummary,
+      diagnosis
+        .diagnosticSummary,
       "",
       "Audio direction:",
-      diagnosis.diagnosticTitle,
+      diagnosis
+        .diagnosticTitle,
     ];
 
     diagnosis
@@ -2188,7 +2277,9 @@ function buildLegacyResult(
   }
 
   const causes =
-    diagnosis.causes.length > 0
+    diagnosis
+      .causes
+      .length > 0
       ? diagnosis.causes
       : [
           {
@@ -2198,10 +2289,12 @@ function buildLegacyResult(
                 : "Insufficient evidence",
 
             description:
-              diagnosis.diagnosticSummary,
+              diagnosis
+                .diagnosticSummary,
 
             verification:
-              diagnosis.nextStepBody,
+              diagnosis
+                .nextStepBody,
           },
         ];
 
@@ -2228,10 +2321,6 @@ Answer options:
 None`;
 }
 
-// ============================================================
-// Audio format
-// ============================================================
-
 function normalizeAudioFormat(
   format,
 ) {
@@ -2243,24 +2332,26 @@ function normalizeAudioFormat(
       .toLowerCase();
 
   if (
-    value.includes("wav")
+    value.includes(
+      "wav",
+    )
   ) {
     return "wav";
   }
 
   if (
-    value.includes("mp3") ||
-    value.includes("mpeg")
+    value.includes(
+      "mp3",
+    ) ||
+    value.includes(
+      "mpeg",
+    )
   ) {
     return "mp3";
   }
 
   return null;
 }
-
-// ============================================================
-// Diagnosis states
-// ============================================================
 
 function normalizeStatus(
   value,
@@ -2273,7 +2364,8 @@ function normalizeStatus(
       .toLowerCase();
 
   if (
-    status === "complete"
+    status ===
+    "complete"
   ) {
     return "complete";
   }
@@ -2299,30 +2391,30 @@ function normalizeConfidence(
       .toLowerCase();
 
   if (
-    confidence === "high"
+    confidence ===
+    "high"
   ) {
     return "high";
   }
 
   if (
-    confidence === "medium" ||
-    confidence === "moderate"
+    confidence ===
+      "medium" ||
+    confidence ===
+      "moderate"
   ) {
     return "medium";
   }
 
   if (
-    confidence === "low"
+    confidence ===
+    "low"
   ) {
     return "low";
   }
 
   return "unknown";
 }
-
-// ============================================================
-// Evidence states
-// ============================================================
 
 function normalizeEvidenceStatus(
   value,
@@ -2335,19 +2427,22 @@ function normalizeEvidenceStatus(
       .toLowerCase();
 
   if (
-    status === "measured"
+    status ===
+    "measured"
   ) {
     return "measured";
   }
 
   if (
-    status === "observed"
+    status ===
+    "observed"
   ) {
     return "observed";
   }
 
   if (
-    status === "inferred"
+    status ===
+    "inferred"
   ) {
     return "inferred";
   }
@@ -2401,7 +2496,8 @@ function normalizeHarmonicEvidenceState(
       );
 
   if (
-    state === "available"
+    state ===
+    "available"
   ) {
     return "available";
   }
@@ -2415,10 +2511,6 @@ function normalizeHarmonicEvidenceState(
 
   return "unavailable";
 }
-
-// ============================================================
-// Follow-up options
-// ============================================================
 
 function normalizeFollowUpOptions(
   value,
@@ -2447,12 +2539,16 @@ function normalizeFollowUpOptions(
             .trim();
 
         if (
-          seen.has(key)
+          seen.has(
+            key,
+          )
         ) {
           return false;
         }
 
-        seen.add(key);
+        seen.add(
+          key,
+        );
 
         return true;
       },
@@ -2491,13 +2587,14 @@ function normalizeFollowUpOptions(
     if (
       options.length >= 4
     ) {
-      options = [
-        ...options.slice(
-          0,
-          3,
-        ),
-        notSure,
-      ];
+      options =
+        [
+          ...options.slice(
+            0,
+            3,
+          ),
+          notSure,
+        ];
     } else {
       options.push(
         notSure,
@@ -2511,16 +2608,14 @@ function normalizeFollowUpOptions(
   );
 }
 
-// ============================================================
-// Primitive normalization
-// ============================================================
-
 function normalizeStringArray(
   value,
   maxItems,
 ) {
   if (
-    !Array.isArray(value)
+    !Array.isArray(
+      value,
+    )
   ) {
     return [];
   }
@@ -2537,7 +2632,28 @@ function normalizeStringArray(
           400,
         ),
     )
-    .filter(Boolean);
+    .filter(
+      Boolean,
+    );
+}
+
+function normalizeEnumValue(
+  value,
+  allowedValues,
+  fallback,
+) {
+  const normalized =
+    String(
+      value ?? "",
+    )
+      .trim()
+      .toLowerCase();
+
+  return allowedValues.has(
+    normalized,
+  )
+    ? normalized
+    : fallback;
 }
 
 function normalizeNumber(
@@ -2552,7 +2668,9 @@ function normalizeNumber(
   }
 
   const number =
-    Number(value);
+    Number(
+      value,
+    );
 
   return Number.isFinite(
     number,
@@ -2571,7 +2689,9 @@ function normalizeInteger(
 
   if (
     number === null ||
-    !Number.isInteger(number)
+    !Number.isInteger(
+      number,
+    )
   ) {
     return null;
   }
@@ -2597,10 +2717,6 @@ function cleanText(
     );
 }
 
-// ============================================================
-// JSON parser
-// ============================================================
-
 function parseJsonObject(
   text,
 ) {
@@ -2623,22 +2739,31 @@ function parseJsonObject(
 
   try {
     const parsed =
-      JSON.parse(clean);
+      JSON.parse(
+        clean,
+      );
 
     if (
       parsed &&
-      typeof parsed === "object" &&
-      !Array.isArray(parsed)
+      typeof parsed ===
+        "object" &&
+      !Array.isArray(
+        parsed,
+      )
     ) {
       return parsed;
     }
   } catch (_) {}
 
   const start =
-    clean.indexOf("{");
+    clean.indexOf(
+      "{",
+    );
 
   const end =
-    clean.lastIndexOf("}");
+    clean.lastIndexOf(
+      "}",
+    );
 
   if (
     start !== -1 &&
@@ -2654,8 +2779,11 @@ function parseJsonObject(
 
     if (
       parsed &&
-      typeof parsed === "object" &&
-      !Array.isArray(parsed)
+      typeof parsed ===
+        "object" &&
+      !Array.isArray(
+        parsed,
+      )
     ) {
       return parsed;
     }
@@ -2678,10 +2806,6 @@ function safeJson(
   }
 }
 
-// ============================================================
-// Defaults
-// ============================================================
-
 function defaultTitle(
   status,
   lang,
@@ -2696,7 +2820,8 @@ function defaultTitle(
   }
 
   if (
-    status === "complete"
+    status ===
+    "complete"
   ) {
     return lang === "es"
       ? "Dirección diagnóstica de audio"
@@ -2722,7 +2847,8 @@ function defaultSummary(
   }
 
   if (
-    status === "complete"
+    status ===
+    "complete"
   ) {
     return lang === "es"
       ? "La evidencia permite una dirección diagnóstica preliminar que todavía requiere verificación física."
