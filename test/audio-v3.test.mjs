@@ -5,6 +5,8 @@ import {validateRequest,inspectWav} from '../lib/audio-v3/contract.js';
 import {normalizeReport} from '../lib/audio-v3/report.js';
 import {buildPrompt} from '../lib/audio-v3/prompt.js';
 import {requestReview} from '../lib/audio-v3/provider.js';
+import {validateFollowUpRequest,buildFollowUpPrompt,requestFollowUp} from '../lib/audio-v3/followup.js';
+import {createHandler as createFollowUpHandler} from '../api/audio-diagnose-v3-followup.js';
 function body() {
  const bytes=Buffer.alloc(44+48000*2);
  bytes.write('RIFF');bytes.writeUInt32LE(bytes.length-8,4);bytes.write('WAVEfmt ',8);
@@ -32,8 +34,8 @@ test('descriptive result completes without any component cause',async()=>{
 test('all supplied measurements are finite and signal values match WAV',()=>{
  const b=body();b.audioEvidence.observations[0].values.rms=0.9;assert.throws(()=>validateRequest(b),/match WAV/);
 });
-for(const origin of ['userReportedSpeakerPlayback','unknown','userReportedOther']) test(`${origin} preserves useful sound assessment with source limitation`,()=>{
- const b=body();b.recordingContext.origin=origin;const r=normalizeReport(raw(),validateRequest(b));assert.equal(r.assessment,'no_fault_supported');assert.match(r.limitations[0],/origin|Speaker/);
+for(const origin of ['userReportedSpeakerPlayback','unknown','userReportedOther']) test(`${origin} does not create a source-choice question`,()=>{
+ const b=body();b.recordingContext.origin=origin;const r=normalizeReport(raw(),validateRequest(b));assert.equal(r.assessment,'no_fault_supported');assert.doesNotMatch(`${r.interpretation} ${r.nextStep} ${r.limitations.join(' ')}`,/speaker playback|recording origin/i);
 });
 test('candidate lists are bounded and provenance remains user report',()=>{
  const input=validateRequest(body());assert.equal(input.context.supportsMeasuredRpmCorrelation,false);
@@ -85,6 +87,15 @@ test('provider payload carries actual WAV, measured data, separate context and t
  assert.match(sent.messages[1].content[0].text,/not measured RPM/);
  assert.match(buildPrompt(input),/do not label/i);
 });
+test('legacy gpt-audio setting is upgraded to the current audio model',async()=>{
+ const previous=process.env.OPENAI_AUDIO_MODEL;process.env.OPENAI_AUDIO_MODEL='gpt-audio';let sent;
+ try {
+  await requestReview(validateRequest(body()),{apiKey:'mock',fetchImpl:async(_url,options)=>{
+   sent=JSON.parse(options.body);return {ok:true,json:async()=>({choices:[{message:{content:JSON.stringify(raw())}}]})};
+  }});
+  assert.equal(sent.model,'gpt-audio-1.5');
+ } finally {if(previous===undefined)delete process.env.OPENAI_AUDIO_MODEL;else process.env.OPENAI_AUDIO_MODEL=previous;}
+});
 test('provider malformed JSON fails closed',async()=>{
  await assert.rejects(requestReview(validateRequest(body()),{apiKey:'mock',fetchImpl:async()=>({ok:true,json:async()=>({choices:[{message:{content:'not json'}}]})})}));
 });
@@ -115,7 +126,7 @@ test('Spanish speed statement is omitted with a localized explanation',()=>{
 test('acoustic pitch description remains intact while prompt separates user reports from speed',()=>{
  const input=validateRequest(body()),claim='The tone rises and falls, with a steady low rumble.';
  const r=normalizeReport({...raw(),soundObservation:claim},input);
- assert.equal(r.soundObservation,claim);assert.equal(r.assessment,'no_fault_supported');assert.equal(r.limitations.length,3);
+ assert.equal(r.soundObservation,claim);assert.equal(r.assessment,'no_fault_supported');assert.equal(r.limitations.length,1);
  assert.match(buildPrompt(input),/Do not invent synchronized RPM/);
 });
 
@@ -126,16 +137,58 @@ function reasoning() {
    verification:'Ask a technician to check exhaust shields and mounts for looseness and contact marks.',supportingEvidenceIds:[]}],
   nextStep:'Was this sound recorded near the exhaust, and does the same rattle recur?'};
 }
+function starterMisfireReport() {
+ return {assessment:'verification_needed',
+  soundObservation:'A sharp isolated burst is followed by a lower, steady and regular rhythmic pattern.',
+  audibleConcern:'A sharp isolated burst at the beginning.',
+  supportingEvidenceIds:['CH0_SIGNAL'],
+  hypotheses:[
+   {title:'Starter engagement or misfire event',reason:'The isolated burst could be starter engagement or a combustion event; the source is uncertain.',
+    verification:'Inspect the starter and flywheel teeth for damage.',supportingEvidenceIds:[]},
+   {title:'Microphone handling or playback artifact',reason:'An isolated burst could come from handling or playback distortion.',
+    verification:'Re-record directly at the engine bay and compare.',supportingEvidenceIds:[]},
+  ],
+  interpretation:'A sharp burst and steady rhythm suggest a starter or misfire event, or a recording artifact.',
+  nextStep:'Check the starter and flywheel teeth.'};
+}
+test('unsupported starter, misfire, and handling guesses are replaced by a useful engine-context check',()=>{
+ const b=body();b.recordingContext.origin='userReportedSpeakerPlayback';
+ b.recordingContext.rpmBehavior='unknown';b.recordingContext.description='';
+ const r=normalizeReport(starterMisfireReport(),validateRequest(b));
+ assert.equal(r.assessment,'no_fault_supported');assert.equal(r.hypotheses.length,0);
+ assert.match(r.interpretation,/does not support a specific fault hypothesis/);
+ assert.match(r.nextStep,/When does the sound occur/);assert.doesNotMatch(`${r.interpretation} ${r.nextStep}`,/inspect.*starter|flywheel.*damage|misfire|handling artifact|recording source/i);
+});
+test('source metadata does not cause a direct-recording instruction or guessed part',()=>{
+ const b=body();b.recordingContext.origin='userReportedSpeakerPlayback';
+ const r=normalizeReport(starterMisfireReport(),validateRequest(b));
+ assert.equal(r.assessment,'no_fault_supported');assert.equal(r.hypotheses.length,0);
+ assert.match(r.nextStep,/When does the sound occur/);
+ assert.doesNotMatch(`${r.interpretation} ${r.nextStep}`,/speaker|direct recording|starter|flywheel|misfire|handling artifact/i);
+});
+test('starter hypothesis remains available when the user reports engine starting',()=>{
+ const b=body();b.recordingContext.engineState='starting';
+ const x=starterMisfireReport();x.hypotheses=x.hypotheses.slice(0,1);x.hypotheses[0].title='Possible starter engagement';x.hypotheses[0].reason='The burst coincides with reported cranking; the recording cannot confirm a damaged part.';x.interpretation='Starter engagement is a possibility during the reported crank.';x.nextStep='A technician can check starter engagement during cranking.';
+ const r=normalizeReport(x,validateRequest(b));
+ assert.equal(r.assessment,'verification_needed');assert.equal(r.hypotheses.length,1);assert.match(r.interpretation,/Starter engagement/);
+});
+test('irregular user-reported operation can retain a misfire hypothesis',()=>{
+ const b=body();b.recordingContext.description='User reports rough idle and engine stumble.';
+ const x=starterMisfireReport();x.hypotheses=[{title:'Possible misfire',reason:'Irregular firing coincides with the reported uneven idle; cause is not established.',
+  verification:'A technician can compare cylinder contribution and stored misfire codes.',supportingEvidenceIds:[]}];x.soundObservation='The engine rhythm sounds uneven and intermittently stumbles.';x.interpretation='The uneven rhythm merits checking against the reported rough idle.';x.nextStep='Check whether the rough idle occurs at the same time.';
+ const r=normalizeReport(x,validateRequest(b));assert.equal(r.hypotheses.length,1);assert.equal(r.assessment,'verification_needed');
+});
 test('a conditional hypothesis and targeted check reach the existing Flutter fields',()=>{
  const r=normalizeReport(reasoning(),validateRequest(body()));
- assert.equal(r.assessment,'verification_needed');assert.match(r.interpretation,/exhaust shield/);
- assert.match(r.interpretation,/location is unconfirmed/);assert.match(r.nextStep,/contact marks/);
+ assert.equal(r.assessment,'verification_needed');assert.match(r.hypotheses[0].title,/exhaust shield/);
+ assert.match(r.hypotheses[0].reason,/location is unconfirmed/);assert.match(r.hypotheses[0].verification,/contact marks/);
  assert.ok(r.interpretation.length<=500);assert.ok(r.nextStep.length<=500);
 });
-test('speaker playback does not discard the hypothesis or the verification plan',()=>{
+test('source metadata does not discard hypotheses or add a playback limitation',()=>{
  const b=body();b.recordingContext.origin='userReportedSpeakerPlayback';
  const r=normalizeReport(reasoning(),validateRequest(b));assert.equal(r.assessment,'verification_needed');
- assert.match(r.interpretation,/shield/);assert.match(r.limitations[0],/Speaker playback/);
+ assert.match(r.hypotheses[0].title,/shield/);assert.match(r.hypotheses[0].verification,/contact marks/);
+ assert.doesNotMatch(r.limitations.join(' '),/Speaker playback/);
 });
 test('unknown hypothesis IDs reject the result',()=>{
  const x=reasoning();x.hypotheses[0].supportingEvidenceIds=['invented'];
@@ -152,15 +205,16 @@ test('new fields cannot smuggle categorical claims',()=>{
   assert.throws(()=>normalizeReport({...reasoning(),[field]:'The engine is healthy.'},validateRequest(body())),/Unsupported/);
  }
 });
-test('two bounded possibilities preserve their complete checks within Flutter limits',()=>{
+test('unsupported handling hypothesis is omitted while a supported mechanical check is retained',()=>{
  const x=reasoning();x.hypotheses.push({title:'Possible recording artifact',reason:'An isolated burst could come from handling or playback distortion.',
  verification:'Compare the original recording with speaker playback to check whether the burst is introduced by playback.',supportingEvidenceIds:['CH0_SIGNAL']});
- const r=normalizeReport(x,validateRequest(body()));assert.match(r.nextStep,/introduced by playback/);
- assert.equal(r.hypotheses.length,2);assert.ok(r.nextStep.length<=500);
+ const b=body();b.recordingContext.origin='userReportedSpeakerPlayback';
+ const r=normalizeReport(x,validateRequest(b));assert.doesNotMatch(r.nextStep,/introduced by playback/);
+ assert.equal(r.hypotheses.length,1);assert.ok(r.nextStep.length<=500);
 });
 test('prompt requests differential reasoning and does not force playback refusal',()=>{
- const prompt=buildPrompt(validateRequest(body()));assert.match(prompt,/TWO ranked/);assert.match(prompt,/Speaker playback can still support/);
- assert.match(prompt,/Do not force a diagnosis/);
+ const prompt=buildPrompt(validateRequest(body()));assert.match(prompt,/single best-supported possible explanation/);assert.match(prompt,/ADAPTIVE INTERVIEW/);
+ assert.match(prompt,/Do not ask the user to classify a clip as speaker playback/);assert.match(prompt,/Do not force a diagnosis/);
 });
 
 test('verbose reasoning is repaired once without truncating uncertainty',async()=>{
@@ -170,7 +224,7 @@ test('verbose reasoning is repaired once without truncating uncertainty',async()
  const repaired=await requestReview(input,{apiKey:'mock',validateOutput:value=>normalizeReport(value,input),
   fetchImpl:async()=>({ok:true,json:async()=>({choices:[{finish_reason:'stop',message:{content:JSON.stringify(++calls===1?verbose:reasoning())}}]})})});
  const report=normalizeReport(repaired,input);
- assert.equal(calls,2);assert.match(report.interpretation,/location is unconfirmed/);
+ assert.equal(calls,2);assert.match(report.hypotheses[0].reason,/location is unconfirmed/);
  assert.doesNotMatch(report.interpretation,/…/);
 });
 test('optional empty narrative fields use meaningful fallback',()=>{
@@ -197,15 +251,15 @@ test('hypothesis rationale and inspection appear once without repeated summary p
  const x=reasoning();x.interpretation='Possible loose exhaust shield.';
  x.nextStep=x.hypotheses[0].verification;
  const r=normalizeReport(x,validateRequest(body()));
- assert.equal(r.interpretation,`1. ${x.hypotheses[0].title}: ${x.hypotheses[0].reason}`);
- assert.equal(r.nextStep,`1. ${x.hypotheses[0].verification}`);
+ assert.match(r.interpretation,/cause remains unconfirmed/);
+ assert.equal(r.nextStep,x.nextStep);
  assert.equal(r.soundObservation,x.soundObservation);
 });
-test('context question is retained alongside both complete checks',()=>{
+test('context question remains the next step while the inspection stays with its hypothesis',()=>{
  const x=reasoning();
  const r=normalizeReport(x,validateRequest(body()));
- assert.ok(r.nextStep.startsWith(x.nextStep));
- assert.match(r.nextStep,/contact marks/);
+ assert.equal(r.nextStep,x.nextStep);
+ assert.match(r.hypotheses[0].verification,/contact marks/);
 });
 test('short nonempty audible concern does not automatically become insufficient evidence',()=>{
  const r=normalizeReport({...reasoning(),audibleConcern:'Ticking'},validateRequest(body()));
@@ -215,6 +269,77 @@ test('hypothesis evidence IDs are included in the report evidence set',()=>{
  const x=reasoning();x.supportingEvidenceIds=[];x.hypotheses[0].supportingEvidenceIds=['CH0_SIGNAL'];
  const r=normalizeReport(x,validateRequest(body()));
  assert.deepEqual(r.supportingEvidenceIds,['CH0_SIGNAL']);
+});
+
+test('follow-up question is structured, bounded, and asks for known context only',()=>{
+ const input=validateRequest(body());
+ const report=normalizeReport({...raw(),sessionStatus:'follow_up',followUpQuestion:{
+  question:'When does this sound occur?',options:['During starting','At idle','Not sure'],
+ }},input);
+ assert.equal(report.sessionStatus,'follow_up');
+ assert.deepEqual(report.followUpQuestion.options,['During starting','At idle','Not sure']);
+ assert.throws(()=>normalizeReport({...raw(),sessionStatus:'follow_up',followUpQuestion:{question:'When?',options:['Yes','No']}},input),/follow-up question/);
+});
+
+function followupBody(){
+ return {mode:'audio_followup_v1',language:'en',session:{contract:'audio_v3_report_v1',sessionStatus:'follow_up',
+  assessment:'verification_needed',soundObservation:'A brief metallic rattle interrupts a steady low hum.',
+  audibleConcern:'A brief metallic rattle',supportingEvidenceIds:['CH0_SIGNAL'],
+  hypotheses:[{title:'Possible loose panel',reason:'A brief metallic rattle can come from a resonating panel; location is uncertain.',
+   verification:'Have a technician check nearby panels and mounts for contact marks.',supportingEvidenceIds:[]}],
+  interpretation:'A loose panel is one possibility; its source is not established.',nextStep:'',limitations:[]},
+  answers:[{question:'When does it happen?',answer:'At idle'}],vehicleProfile:{year:'2018',make:'Toyota',model:'Camry'},
+  allowedEvidenceIds:['CH0_SIGNAL']};
+}
+test('follow-up contract bounds history and never requests the WAV again',()=>{
+ const input=validateFollowUpRequest(followupBody()),prompt=buildFollowUpPrompt(input);
+ assert.equal(input.answers.length,1);assert.match(prompt,/At idle/);assert.match(prompt,/not to declare a final fault/);
+ assert.doesNotMatch(JSON.stringify(input),/audioBase64|base64/);
+ assert.throws(()=>validateFollowUpRequest({...followupBody(),answers:[]}),/history/);
+ assert.throws(()=>validateFollowUpRequest({...followupBody(),allowedEvidenceIds:['UNKNOWN']}),/session/);
+});
+test('follow-up provider sends text only and keeps the existing acoustic session',async()=>{
+ let sent;
+ const result=await requestFollowUp(validateFollowUpRequest(followupBody()),{apiKey:'mock',fetchImpl:async(_url,init)=>{
+  sent=JSON.parse(init.body);return {ok:true,json:async()=>({choices:[{finish_reason:'stop',message:{content:JSON.stringify({decision:'complete',question:null,report:raw()})}}]})};
+ }});
+ assert.equal(result.decision,'complete');assert.deepEqual(sent.modalities,['text']);
+ assert.doesNotMatch(JSON.stringify(sent),/input_audio|audioBase64/);
+});
+test('text follow-up uses a separate cost-efficient model by default',async()=>{
+ const priorAudio=process.env.OPENAI_AUDIO_MODEL,priorFollow=process.env.OPENAI_AUDIO_FOLLOWUP_MODEL,priorText=process.env.OPENAI_AUDIO_TEXT_MODEL;
+ delete process.env.OPENAI_AUDIO_MODEL;delete process.env.OPENAI_AUDIO_FOLLOWUP_MODEL;delete process.env.OPENAI_AUDIO_TEXT_MODEL;let sent;
+ try {
+  await requestFollowUp(validateFollowUpRequest(followupBody()),{apiKey:'mock',fetchImpl:async(_url,init)=>{
+   sent=JSON.parse(init.body);return {ok:true,json:async()=>({choices:[{finish_reason:'stop',message:{content:JSON.stringify({decision:'complete',question:null,report:raw()})}}]})};
+  }});
+  assert.equal(sent.model,'gpt-4o-mini');
+ } finally {
+  if(priorAudio===undefined)delete process.env.OPENAI_AUDIO_MODEL;else process.env.OPENAI_AUDIO_MODEL=priorAudio;
+  if(priorFollow===undefined)delete process.env.OPENAI_AUDIO_FOLLOWUP_MODEL;else process.env.OPENAI_AUDIO_FOLLOWUP_MODEL=priorFollow;
+  if(priorText===undefined)delete process.env.OPENAI_AUDIO_TEXT_MODEL;else process.env.OPENAI_AUDIO_TEXT_MODEL=priorText;
+ }
+});
+test('follow-up endpoint returns a next question and enforces the three-question ceiling',async()=>{
+ const next={decision:'ask_question',question:{question:'Did a warning light appear?',options:['Yes','No','Not sure']},report:raw()};
+ const handler=createFollowUpHandler({getApiKey:()=> 'test',review:async()=>next});
+ const res=response();await handler({method:'POST',body:followupBody()},res);
+ assert.equal(res.statusCode,200);assert.equal(res.body.decision,'ask_question');
+ assert.equal(res.body.report.sessionStatus,'follow_up');assert.match(res.body.question.question,/warning light/);
+ const finalBody=followupBody();finalBody.answers=[...finalBody.answers,{question:'Q2?',answer:'No'},{question:'Q3?',answer:'No'}];
+ const finalRes=response();await handler({method:'POST',body:finalBody},finalRes);
+ assert.equal(finalRes.statusCode,200);assert.equal(finalRes.body.decision,'complete');
+});
+test('a user-reported cranking answer permits a conditional starter possibility',async()=>{
+ const b=followupBody();b.answers[0]={question:'When does it occur?',answer:'While the engine is cranking'};
+ const report={...raw(),assessment:'verification_needed',audibleConcern:'A brief metallic burst during startup',
+  hypotheses:[{title:'Possible starter engagement',reason:'The reported cranking timing fits a starter event; the sound alone cannot confirm wear.',
+   verification:'A technician can inspect starter engagement and the ring gear for abnormal contact marks.',supportingEvidenceIds:[]}],
+  interpretation:'A starter event is one possibility because the user reports cranking.',nextStep:'Have a technician compare the sound with starter engagement.'};
+ const handler=createFollowUpHandler({getApiKey:()=> 'test',review:async()=>({decision:'complete',question:null,report})});
+ const res=response();await handler({method:'POST',body:b},res);
+ assert.equal(res.statusCode,200);assert.equal(res.body.report.hypotheses.length,1);
+ assert.match(res.body.report.hypotheses[0].title,/starter/i);
 });
 
 test('negative qualification is retained but a separate safety clearance is rejected',()=>{
@@ -241,7 +366,8 @@ test('maximum bounded prose retains every complete field in existing Flutter lim
  x.hypotheses=[0,1].map(i=>({title:String(i)+'c'.repeat(49),reason:'d'.repeat(140),verification:String(i)+'e'.repeat(144),supportingEvidenceIds:[]}));
  const r=normalizeReport(x,validateRequest(body()));
  assert.ok(r.interpretation.length<=500);assert.ok(r.nextStep.length<=500);
- for(const h of x.hypotheses) {assert.ok(r.interpretation.includes(h.reason));assert.ok(r.nextStep.includes(h.verification));}
+ assert.equal(r.hypotheses.length,2);
+ for(let i=0;i<r.hypotheses.length;i++) {assert.ok(r.hypotheses[i].reason.length<=140);assert.ok(r.hypotheses[i].verification.length<=145);}
 });
 test('provider repairs incomplete completion once and preserves the same audio',async()=>{
  let calls=0;const payloads=[];const input=validateRequest(body());
