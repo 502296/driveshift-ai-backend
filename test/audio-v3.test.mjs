@@ -23,7 +23,7 @@ function body() {
 }
 const raw=()=>({assessment:'no_fault_supported',soundObservation:'The engine-like sound grows and settles as the throttle changes.',audibleConcern:'',supportingEvidenceIds:['CH0_SIGNAL']});
 const response=()=>({statusCode:null,headers:{},setHeader(k,v){this.headers[k]=v;},status(n){this.statusCode=n;return this;},json(x){this.body=x;return this;}});
-async function call(b,options={}) {const res=response();await createHandler({getApiKey:()=> 'test-key',review:async()=>raw(),...options})({method:'POST',body:b},res);return res;}
+async function call(b,options={}) {const res=response();await createHandler({getApiKey:()=> 'test-key',review:async()=>raw(),logFailure:()=>{},...options})({method:'POST',body:b},res);return res;}
 
 test('descriptive result completes without any component cause',async()=>{
  const r=await call(body());assert.equal(r.statusCode,200);assert.equal(r.body.report.assessment,'no_fault_supported');
@@ -49,7 +49,7 @@ test('verification accepts acoustic linkage but never confirms failed part',()=>
  const b=body();b.audioEvidence.observations.push({id:'CH0_TRANSIENT_0',kind:'transient',channel:0,values:{centerSeconds:0.8,energyRiseDb:6.9,rms:0.2}});
  const s=b.audioEvidence.stageSummaries.find(x=>x.kind==='transient');s.totalCount=s.includedCount=1;
  const r=normalizeReport({...raw(),assessment:'verification_needed',audibleConcern:'A possible metallic rattle',supportingEvidenceIds:['CH0_TRANSIENT_0']},validateRequest(b));
- assert.equal(r.assessment,'verification_needed');assert.match(r.interpretation,/no failed part is confirmed/);
+ assert.equal(r.assessment,'verification_needed');assert.match(r.interpretation,/cause remains unconfirmed/);
 });
 for(const claim of ['The engine is healthy.','It is safe to drive.','There is a confirmed knock.','Measured RPM is 2300.']) test(`reject categorical claim: ${claim}`,async()=>{
  assert.equal((await call(body(),{review:async()=>({...raw(),soundObservation:claim})})).statusCode,502);
@@ -161,4 +161,123 @@ test('two bounded possibilities preserve their complete checks within Flutter li
 test('prompt requests differential reasoning and does not force playback refusal',()=>{
  const prompt=buildPrompt(validateRequest(body()));assert.match(prompt,/TWO ranked/);assert.match(prompt,/Speaker playback can still support/);
  assert.match(prompt,/Do not force a diagnosis/);
+});
+
+test('verbose reasoning is repaired once without truncating uncertainty',async()=>{
+ const input=validateRequest(body());const verbose=reasoning();
+ verbose.hypotheses[0].reason='The short metallic texture could be a loose vibrating part; its location remains uncertain. '.repeat(3);
+ let calls=0;
+ const repaired=await requestReview(input,{apiKey:'mock',validateOutput:value=>normalizeReport(value,input),
+  fetchImpl:async()=>({ok:true,json:async()=>({choices:[{finish_reason:'stop',message:{content:JSON.stringify(++calls===1?verbose:reasoning())}}]})})});
+ const report=normalizeReport(repaired,input);
+ assert.equal(calls,2);assert.match(report.interpretation,/location is unconfirmed/);
+ assert.doesNotMatch(report.interpretation,/…/);
+});
+test('optional empty narrative fields use meaningful fallback',()=>{
+ const r=normalizeReport({...raw(),interpretation:'',nextStep:''},validateRequest(body()));
+ assert.match(r.nextStep,/Describe when/);
+});
+test('failure diagnostics distinguish validation from provider failures without exposing data',async()=>{
+ let detail;
+ const r=await call(body(),{review:async()=>({...raw(),supportingEvidenceIds:['bad']}),logFailure:x=>detail=x});
+ assert.equal(r.body.phase,'report_validation');assert.equal(r.body.reason,'INVALID_REPORT_CONTRACT');
+ assert.deepEqual(detail,{phase:'report_validation',reason:'INVALID_REPORT_CONTRACT'});
+ const upstream=await call(body(),{review:async()=>{throw new Error('private-secret-audio');},logFailure:x=>detail=x});
+ assert.equal(upstream.body.phase,'provider');assert.equal(upstream.body.reason,'REVIEW_ERROR');
+ assert.doesNotMatch(JSON.stringify(detail)+JSON.stringify(upstream.body),/private-secret/);
+});
+
+test('report retains decimal timestamps while removing a separate unsupported speed statement',()=>{
+ const x=reasoning();x.soundObservation='Sharp bursts around 0.7s and 10.2s. Engine speed rises to 2400 RPM.';
+ const r=normalizeReport(x,validateRequest(body()));
+ assert.equal(r.soundObservation,'Sharp bursts around 0.7s and 10.2s.');
+ assert.doesNotMatch(r.soundObservation,/0\. 7|RPM/);
+});
+test('hypothesis rationale and inspection appear once without repeated summary prose',()=>{
+ const x=reasoning();x.interpretation='Possible loose exhaust shield.';
+ x.nextStep=x.hypotheses[0].verification;
+ const r=normalizeReport(x,validateRequest(body()));
+ assert.equal(r.interpretation,`1. ${x.hypotheses[0].title}: ${x.hypotheses[0].reason}`);
+ assert.equal(r.nextStep,`1. ${x.hypotheses[0].verification}`);
+ assert.equal(r.soundObservation,x.soundObservation);
+});
+test('context question is retained alongside both complete checks',()=>{
+ const x=reasoning();
+ const r=normalizeReport(x,validateRequest(body()));
+ assert.ok(r.nextStep.startsWith(x.nextStep));
+ assert.match(r.nextStep,/contact marks/);
+});
+test('short nonempty audible concern does not automatically become insufficient evidence',()=>{
+ const r=normalizeReport({...reasoning(),audibleConcern:'Ticking'},validateRequest(body()));
+ assert.equal(r.assessment,'verification_needed');
+});
+test('hypothesis evidence IDs are included in the report evidence set',()=>{
+ const x=reasoning();x.supportingEvidenceIds=[];x.hypotheses[0].supportingEvidenceIds=['CH0_SIGNAL'];
+ const r=normalizeReport(x,validateRequest(body()));
+ assert.deepEqual(r.supportingEvidenceIds,['CH0_SIGNAL']);
+});
+
+test('negative qualification is retained but a separate safety clearance is rejected',()=>{
+ const input=validateRequest(body());
+ const r=normalizeReport({...raw(),soundObservation:'This recording does not prove the engine is healthy.'},input);
+ assert.match(r.soundObservation,/does not prove/);
+ assert.throws(()=>normalizeReport({...raw(),soundObservation:'The engine is not healthy, but it is safe to drive.'},input),/Unsupported/);
+});
+test('missing RPM and explicitly attributed user reports survive without claiming measurement',()=>{
+ const input=validateRequest(body());
+ for(const soundObservation of ['A steady tone is audible. No synchronized RPM is available.', 'The user reports engine speed changes; an audible pitch rise is present.']) {
+  assert.equal(normalizeReport({...raw(),soundObservation},input).soundObservation,soundObservation);
+ }
+});
+test('distinct practical meaning and non-question action are preserved',()=>{
+ const x=reasoning();x.interpretation='Locate the source before selecting a component.';
+ x.nextStep='Ask a technician to localize the sound before checking individual parts.';
+ const r=normalizeReport(x,validateRequest(body()));
+ assert.ok(r.interpretation.startsWith(x.interpretation));assert.ok(r.nextStep.startsWith(x.nextStep));
+ assert.ok(r.nextStep.length<=500);assert.ok(r.interpretation.length<=500);
+});
+test('maximum bounded prose retains every complete field in existing Flutter limits',()=>{
+ const x=reasoning();x.interpretation='a'.repeat(100);x.nextStep='b'.repeat(160);
+ x.hypotheses=[0,1].map(i=>({title:String(i)+'c'.repeat(49),reason:'d'.repeat(140),verification:String(i)+'e'.repeat(144),supportingEvidenceIds:[]}));
+ const r=normalizeReport(x,validateRequest(body()));
+ assert.ok(r.interpretation.length<=500);assert.ok(r.nextStep.length<=500);
+ for(const h of x.hypotheses) {assert.ok(r.interpretation.includes(h.reason));assert.ok(r.nextStep.includes(h.verification));}
+});
+test('provider repairs incomplete completion once and preserves the same audio',async()=>{
+ let calls=0;const payloads=[];const input=validateRequest(body());
+ await requestReview(input,{apiKey:'mock',fetchImpl:async(url,options)=>{
+  payloads.push(JSON.parse(options.body));return {ok:true,json:async()=>({choices:[{finish_reason:++calls===1?'length':'stop',message:{content:JSON.stringify(raw())}}]})};
+ }});
+ assert.equal(calls,2);assert.equal(payloads[0].messages[1].content[1].input_audio.data,payloads[1].messages[1].content[1].input_audio.data);
+});
+test('invalid completions are bounded to two calls and HTTP failures are not retried',async()=>{
+ for(const http of [false,true]) {
+  let calls=0;
+  await assert.rejects(requestReview(validateRequest(body()),{apiKey:'mock',fetchImpl:async()=>{
+   calls++;return http?{ok:false,status:401}:{ok:true,json:async()=>({choices:[{finish_reason:'stop',message:{content:'{broken'}}]})};
+  }}));
+  assert.equal(calls,http?1:2);
+ }
+});
+test('endpoint passes its API key and report validator to provider',async()=>{
+ let options;
+ const r=await call(body(),{review:async(input,args)=>{options=args;return raw();},getApiKey:()=> 'test-secret'});
+ assert.equal(r.statusCode,200);assert.equal(options.apiKey,'test-secret');assert.equal(typeof options.validateOutput,'function');
+});
+test('endpoint labels an incomplete completion without exposing content',async()=>{
+ const r=await call(body(),{review:async()=>{throw new Error('Incomplete provider response');}});
+ assert.equal(r.body.reason,'INCOMPLETE_PROVIDER_RESPONSE');
+});
+test('provider aborts within its shared timeout budget',async()=>{
+ let calls=0;
+ await assert.rejects(requestReview(validateRequest(body()),{apiKey:'mock',timeoutMs:20,
+  fetchImpl:async(url,{signal})=>{calls++;return new Promise((resolve,reject)=>{
+   signal.addEventListener('abort',()=>{const error=new Error('aborted');error.name='AbortError';reject(error);},{once:true});
+  });},
+ }),error=>error.name==='AbortError');
+ assert.equal(calls,1);
+});
+test('a negated acoustic finding does not excuse an unsupported RPM claim',()=>{
+ const r=normalizeReport({...raw(),soundObservation:'No distinct knocks at 2400 RPM. A steady hum is audible.'},validateRequest(body()));
+ assert.equal(r.soundObservation,'A steady hum is audible.');
 });
