@@ -36,7 +36,7 @@ export function createHandler({review=requestReview, getApiKey=()=>process.env.O
    const reason=known[message] || (error?.name==='AbortError'?'PROVIDER_TIMEOUT':
     /^Audio provider HTTP \d{3}$/.test(message)?'PROVIDER_HTTP_ERROR':
      error instanceof SyntaxError?'INVALID_PROVIDER_JSON':'REVIEW_ERROR');
-   try { logFailure({phase,reason}); } catch { /* logging must not break the response */ }
+   try { logFailure({phase,reason,...(error?.field ? {field:error.field} : {})}); } catch { /* logging must not break the response */ }
    return res.status(502).json({code:'AUDIO_V3_REVIEW_FAILED',phase,reason});
   }
  };
