@@ -190,10 +190,16 @@ test('source metadata does not discard hypotheses or add a playback limitation',
  assert.match(r.hypotheses[0].title,/shield/);assert.match(r.hypotheses[0].verification,/contact marks/);
  assert.doesNotMatch(r.limitations.join(' '),/Speaker playback/);
 });
-test('unknown hypothesis IDs reject the result',()=>{
- const x=reasoning();x.hypotheses[0].supportingEvidenceIds=['invented'];
- assert.throws(()=>normalizeReport(x,validateRequest(body())),/evidence/);
+test('unknown hypothesis IDs are safely discarded',()=>{
+ const input=validateRequest(body());
+ const x=reasoning();
+ x.hypotheses[0].supportingEvidenceIds=['CH0_UNKNOWN'];
+ const report=normalizeReport(x,input);
+ assert.equal(report.assessment,'insufficient_evidence');
+ assert.deepEqual(report.hypotheses,[]);
+ assert.equal(report.supportingEvidenceIds.includes('CH0_UNKNOWN'),false);
 });
+
 test('no-fault report cannot contain a contradictory component hypothesis',()=>{
  assert.throws(()=>normalizeReport({...reasoning(),assessment:'no_fault_supported'},validateRequest(body())),/conflict/);
 });
@@ -289,11 +295,11 @@ function followupBody(){
    verification:'Have a technician check nearby panels and mounts for contact marks.',supportingEvidenceIds:[]}],
   interpretation:'A loose panel is one possibility; its source is not established.',nextStep:'',limitations:[]},
   answers:[{question:'When does it happen?',answer:'At idle'}],vehicleProfile:{year:'2018',make:'Toyota',model:'Camry'},
-  allowedEvidenceIds:['CH0_SIGNAL']};
+  audioEvidence:[{id:'CH0_SIGNAL',kind:'digital_signal',channel:0,values:{rms:0.01,rmsDbfs:-40,peak:0.02,nearFullScaleFraction:0}}],allowedEvidenceIds:['CH0_SIGNAL']};
 }
 test('follow-up contract bounds history and never requests the WAV again',()=>{
  const input=validateFollowUpRequest(followupBody()),prompt=buildFollowUpPrompt(input);
- assert.equal(input.answers.length,1);assert.match(prompt,/At idle/);assert.match(prompt,/not to declare a final fault/);
+ assert.equal(input.answers.length,1);assert.match(prompt,/At idle/);assert.match(prompt,/confirmed mechanical diagnoses/i);
  assert.doesNotMatch(JSON.stringify(input),/audioBase64|base64/);
  assert.throws(()=>validateFollowUpRequest({...followupBody(),answers:[]}),/history/);
  assert.throws(()=>validateFollowUpRequest({...followupBody(),allowedEvidenceIds:['UNKNOWN']}),/session/);
