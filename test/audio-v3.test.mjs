@@ -566,3 +566,25 @@ test('diagnostic prompts distinguish clip timing, temperature and the three belt
   assert.match(prompt,/discriminating/);
  }
 });
+
+for (const shape of ['missing_ids','too_many']) test(`initial hypothesis repair names the schema: ${shape}`,async()=>{
+ const b=body();b.interviewRequired=true;const input=validateRequest(b);
+ const hypothesis={title:'Possible mechanical resonance',reason:'The audible rattle warrants localization; its source is unconfirmed.',verification:'A technician should localize the rattle.',supportingEvidenceIds:[]};
+ const valid={...raw(),assessment:'verification_needed',audibleConcern:'A metallic rattle',hypotheses:[hypothesis]};
+ const malformed=shape==='too_many'?{...valid,hypotheses:[hypothesis,hypothesis,hypothesis]}:{...valid,hypotheses:[{...hypothesis,supportingEvidenceIds:undefined}]};
+ let calls=0;const requests=[];
+ const result=await requestReview(input,{apiKey:'mock',validateOutput:value=>normalizeReport(value,input,{requireConsistentAssessment:true}),fetchImpl:async(_url,options)=>{
+  requests.push(JSON.parse(options.body));calls++;
+  return {ok:true,json:async()=>({choices:[{finish_reason:'stop',message:{content:JSON.stringify(calls===1?malformed:valid)}}]})};
+ }});
+ assert.equal(calls,2);assert.equal(result.hypotheses.length,1);
+ assert.match(requests[1].messages.at(-1).content,/Every object MUST contain/);
+ assert.match(requests[1].messages.at(-1).content,/supportingEvidenceIds/);
+ assert.equal(requests[1].messages[1].content[1].input_audio.data,input.audioBase64);
+});
+test('hypothesis shape failure identifies the missing field without logging audio',async()=>{
+ const b=body();b.interviewRequired=true;let logged;
+ const r=await call(b,{review:async()=>({...raw(),hypotheses:[{title:'Resonance'}]}),logFailure:detail=>{logged=detail;}});
+ assert.equal(r.statusCode,502);assert.equal(logged.reason,'INVALID_HYPOTHESES');
+ assert.equal(logged.field,'hypotheses[0].supportingEvidenceIds');assert.equal(logged.audio,undefined);
+});
