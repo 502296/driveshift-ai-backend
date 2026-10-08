@@ -435,3 +435,104 @@ test('follow-up preserves measured evidence and rejects mismatched citations',()
  assert.match(buildFollowUpPrompt(input),/"rmsDbfs":-40/);
  b.audioEvidence[0].id='CH0_OTHER';assert.throws(()=>validateFollowUpRequest(b),/evidence/i);
 });
+
+
+test('a complete interpretation over 100 characters is retained within the client limit',async()=>{
+ const x=reasoning();x.interpretation='The audible rattle warrants locating its source before choosing a component. This recording supports a targeted inspection, but the exact cause remains unconfirmed.';
+ assert.ok(x.interpretation.length>100);
+ const r=await call(body(),{review:async()=>x});
+ assert.equal(r.statusCode,200);
+ assert.equal(r.body.report.interpretation,x.interpretation);
+});
+test('interpretation still rejects oversized, non-text and unsupported output',()=>{
+ const input=validateRequest(body());
+ for(const interpretation of ['a'.repeat(501),{},null]) {
+  assert.throws(()=>normalizeReport({...reasoning(),interpretation},input),error=>error.message==='Invalid reasoning field' && error.field==='interpretation');
+ }
+ assert.throws(()=>normalizeReport({...reasoning(),interpretation:'The engine is healthy.'},input),/Unsupported/);
+});
+
+test('required interview asks before showing a final report even with operating context',async()=>{
+ const b=body();b.interviewRequired=true;
+ const r=await call(b,{review:async()=>raw()});
+ assert.equal(r.statusCode,200);assert.equal(r.body.report.sessionStatus,'follow_up');
+ assert.ok(r.body.report.followUpQuestion.options.includes('Not sure'));
+ assert.match(r.body.report.followUpQuestion.question,/Besides this sound/);
+});
+test('required interview retains the model-generated sound-specific question',async()=>{
+ const b=body();b.interviewRequired=true;
+ const q={question:'Does this whine occur with the A/C off as well?',options:['Yes','No','Not sure']};
+ const r=await call(b,{review:async()=>({...raw(),sessionStatus:'follow_up',followUpQuestion:q})});
+ assert.deepEqual(r.body.report.followUpQuestion,q);
+});
+test('required interview has a localized fallback when timing is not known',async()=>{
+ const b=body();b.interviewRequired=true;b.language='es';b.recordingContext={};
+ const r=await call(b,{review:async()=>raw()});
+ assert.equal(r.body.report.sessionStatus,'follow_up');assert.ok(r.body.report.followUpQuestion.options.includes('No estoy seguro'));
+});
+test('strict report cannot silently turn a missing concern into recording insufficiency',()=>{
+ assert.throws(()=>normalizeReport({...reasoning(),audibleConcern:''},validateRequest(body()),{requireConsistentAssessment:true}),/consistency/);
+ assert.throws(()=>normalizeReport({...raw(),assessment:'insufficient_evidence'},validateRequest(body()),{requireConsistentAssessment:true}),/consistency/);
+ const report=normalizeReport({...raw(),assessment:'insufficient_evidence',recordingLimitation:'Wind masks the target sound.'},validateRequest(body()),{requireConsistentAssessment:true});
+ assert.ok(report.limitations.includes('Wind masks the target sound.'));
+});
+test('strict report requests repair instead of downgrading an invalid citation',()=>{
+ const x=reasoning();x.hypotheses[0].supportingEvidenceIds=['CH0_INVENTED'];
+ assert.throws(()=>normalizeReport(x,validateRequest(body()),{requireConsistentAssessment:true}),/hypothesis evidence/);
+});
+test('follow-up keeps initial listening and original context while returning a targeted next question',async()=>{
+ const b=followupBody();b.interviewRequired=true;b.recordingContext={engineState:'running',description:'Only with the A/C on',rpmBehavior:'idle_only'};
+ const r=response();const handler=createFollowUpHandler({getApiKey:()=> 'mock',review:async(input)=>{
+  assert.equal(input.context.engineState,'running');assert.equal(input.context.rpmBehavior,'idle_only');
+  assert.equal(input.context.description,'Only with the A/C on');
+  assert.match(buildFollowUpPrompt(input),/ORIGINAL RECORDING CONTEXT/);
+  return {decision:'ask_question',question:{question:'Was a warning light already on?',options:['Yes','No','Not sure']},report:{...reasoning(),soundObservation:'A newly invented sound.'}};
+ }});
+ await handler({method:'POST',body:b},r);assert.equal(r.statusCode,200);
+ assert.equal(r.body.report.soundObservation,b.session.soundObservation);
+ assert.equal(r.body.decision,'ask_question');
+});
+test('a negative answer to a startup question is not evidence for a starter diagnosis',async()=>{
+ const b=followupBody();b.interviewRequired=true;b.recordingContext={engineState:'running'};
+ b.answers=[{question:'Does it happen during startup or cranking?',answer:'No, only while running'}];
+ const x=reasoning();x.hypotheses[0].title='Possible starter drive';
+ const r=response();await createFollowUpHandler({getApiKey:()=> 'mock',review:async()=>({decision:'complete',question:null,report:x})})({method:'POST',body:b},r);
+ assert.equal(r.statusCode,502);
+});
+test('an answered question cannot be repeated in a required interview',async()=>{
+ const b=followupBody();b.interviewRequired=true;
+ const r=response();await createFollowUpHandler({getApiKey:()=> 'mock',review:async()=>({decision:'ask_question',question:{question:b.answers[0].question,options:['Yes','No','Not sure']},report:raw()})})({method:'POST',body:b},r);
+ assert.equal(r.statusCode,502);
+});
+test('Not sure ends usefully without erasing a clear sound or inventing a diagnosis',async()=>{
+ const b=followupBody();b.interviewRequired=true;b.answers=[{question:'When?',answer:'Not sure'},{question:'Any other symptom?',answer:'Not sure'},{question:'Recurring?',answer:'Not sure'}];
+ const r=response();await createFollowUpHandler({getApiKey:()=> 'mock',review:async()=>({decision:'ask_question',question:{question:'Fourth?',options:['Yes','No','Not sure']},report:{...raw(),interpretation:'The rattle is audible but its source remains unresolved.',nextStep:'Have a technician localize the rattle before selecting any part.'}})})({method:'POST',body:b},r);
+ assert.equal(r.statusCode,200);assert.equal(r.body.decision,'complete');
+ assert.equal(r.body.report.soundObservation,b.session.soundObservation);
+ assert.equal(r.body.report.assessment,'no_fault_supported');assert.deepEqual(r.body.report.hypotheses,[]);
+});
+test('text follow-up repairs a malformed report once within the same history',async()=>{
+ const input=validateFollowUpRequest(followupBody());let calls=0;const sent=[];
+ await requestFollowUp(input,{apiKey:'mock',validateOutput:value=>{if(!value.report) throw new Error('Invalid report contract');},fetchImpl:async(_url,options)=>{
+  sent.push(JSON.parse(options.body));return {ok:true,json:async()=>({choices:[{finish_reason:'stop',message:{content:JSON.stringify(++calls===1?{}:{decision:'complete',report:raw()})}}]})};
+ }});
+ assert.equal(calls,2);assert.equal(sent[0].messages[1].content,sent[1].messages[1].content);
+});
+
+test('required interviews use the full text model unless explicitly configured',async()=>{
+ const input=validateFollowUpRequest({...followupBody(),interviewRequired:true});
+ const keys=['OPENAI_AUDIO_FOLLOWUP_MODEL','OPENAI_AUDIO_TEXT_MODEL'];const previous=keys.map(k=>process.env[k]);let sent;
+ try {
+  keys.forEach(k=>delete process.env[k]);
+  await requestFollowUp(input,{apiKey:'mock',fetchImpl:async(_url,options)=>{
+   sent=JSON.parse(options.body);return {ok:true,json:async()=>({choices:[{finish_reason:'stop',message:{content:JSON.stringify({decision:'complete',report:raw()})}}]})};
+  }});
+  assert.equal(sent.model,'gpt-4.1');assert.match(sent.messages[1].content,/do not claim to hear it again/i);
+ } finally {keys.forEach((k,i)=>previous[i]===undefined?delete process.env[k]:process.env[k]=previous[i]);}
+});
+test('required reports accept complete bounded rationale without truncating it',()=>{
+ const x=reasoning();x.hypotheses[0].reason='The brief metallic resonance could come from a panel vibrating against a nearby mount. The recording supports a localization check, but cannot establish which panel or bracket is responsible.';
+ x.hypotheses[0].verification='A technician can check nearby panels for contact marks and loose mountings; matching the rattle to movement at a contact point would support this explanation.';
+ const r=normalizeReport(x,validateRequest(body()),{requireConsistentAssessment:true});
+ assert.equal(r.hypotheses[0].reason,x.hypotheses[0].reason);assert.equal(r.hypotheses[0].verification,x.hypotheses[0].verification);
+});

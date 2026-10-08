@@ -1,3 +1,4 @@
+import {startInterview} from '../lib/audio-v3/interview.js';
 import {InputError,validateRequest} from '../lib/audio-v3/contract.js';
 import {requestReview} from '../lib/audio-v3/provider.js';
 import {normalizeReport} from '../lib/audio-v3/report.js';
@@ -16,14 +17,15 @@ export function createHandler({review=requestReview, getApiKey=()=>process.env.O
    const raw=await review(input,{
     apiKey:getApiKey(),
     onStage:stage=>{phase=stage;},
-    validateOutput:value=>normalizeReport(value,input),
+    validateOutput:value=>normalizeReport(startInterview(value,input),input,{requireConsistentAssessment:input.interviewRequired}),
    });
    phase='report_validation';
-   return res.status(200).json({report:normalizeReport(raw,input)});
+   return res.status(200).json({report:normalizeReport(startInterview(raw,input),input,{requireConsistentAssessment:input.interviewRequired})});
   } catch(error) {
    // Only controlled diagnostic codes; never input or provider response text.
    const known={
     'Invalid report contract':'INVALID_REPORT_CONTRACT',
+    'Invalid report consistency':'INVALID_REPORT_CONSISTENCY',
     'Unsupported report claim':'UNSUPPORTED_CLAIM',
     'Invalid reasoning field':'INVALID_REASONING_FIELD',
     'Invalid hypotheses':'INVALID_HYPOTHESES',
