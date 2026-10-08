@@ -17,7 +17,7 @@ export function createHandler({review=requestFollowUp,getApiKey=()=>process.env.
    const reportedContext=input.answers.map(row=>`${row.question}: ${row.answer}`).join(' | ');
    const reportedStarting=/(?:while|during|when|at)\s+(?:the\s+)?(?:engine\s+)?(?:cranking|starting|start-up)|\b(?:cranking|cranks|at startup|during startup)\b|(?:mientras|durante|al)\s+(?:arranca|arrancar|encender)/i.test(reportedContext);
    const reportInput={language:input.language,ids:input.ids,context:{origin:'unknown',rpmBehavior:'unknown',engineState:reportedStarting?'starting':'unknown',description:`User reports ${reportedContext}`},vehicleProfile:input.vehicleProfile};
-   const normalized=normalizeReport({...raw.report,sessionStatus:ask?'follow_up':'complete',followUpQuestion:ask?raw.question:null},reportInput);
+   const normalized=normalizeReport({...raw.report,sessionStatus:ask?'follow_up':'complete',followUpQuestion:ask?raw.question:null},reportInput,{allowOccurrenceFollowUp:false});
    if(ask&&!normalized.followUpQuestion) throw new Error('Invalid follow-up question');
    return res.status(200).json({decision:ask?'ask_question':'complete',question:ask?normalized.followUpQuestion:null,report:normalized});
   } catch(error) {

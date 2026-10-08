@@ -203,6 +203,16 @@ test('unknown hypothesis IDs are safely discarded',()=>{
 test('no-fault report cannot contain a contradictory component hypothesis',()=>{
  assert.throws(()=>normalizeReport({...reasoning(),assessment:'no_fault_supported'},validateRequest(body())),/conflict/);
 });
+test('a recognizable squeal still asks for context when assessment says no fault is supported',()=>{
+ const b=body();b.recordingContext.engineState='unknown';b.recordingContext.rpmBehavior='unknown';b.recordingContext.description='';
+ const x={...raw(),assessment:'no_fault_supported',sessionStatus:'complete',
+  soundObservation:'A brief high-pitched squeal is heard shortly after the recording starts, then stops.',
+  audibleConcern:'A brief high-pitched squeal'};
+ const r=normalizeReport(x,validateRequest(b));
+ assert.equal(r.assessment,'no_fault_supported');assert.equal(r.sessionStatus,'follow_up');
+ assert.match(r.followUpQuestion.question,/only as the engine starts/);
+ assert.deepEqual(r.followUpQuestion.options,['Only during startup','While running','Both','Not sure']);
+});
 test('empty audible concern cannot produce an accepted fault hypothesis',()=>{
  assert.throws(()=>normalizeReport({...reasoning(),audibleConcern:''},validateRequest(body())),/conflict/);
 });
@@ -412,4 +422,16 @@ test('provider aborts within its shared timeout budget',async()=>{
 test('a negated acoustic finding does not excuse an unsupported RPM claim',()=>{
  const r=normalizeReport({...raw(),soundObservation:'No distinct knocks at 2400 RPM. A steady hum is audible.'},validateRequest(body()));
  assert.equal(r.soundObservation,'A steady hum is audible.');
+});
+
+test('follow-up completion cannot reopen the occurrence interview',async()=>{
+ const b=followupBody();b.answers=[{question:'When?',answer:'Not sure'},{question:'Q2?',answer:'Not sure'},{question:'Q3?',answer:'Not sure'}];
+ const handler=createFollowUpHandler({getApiKey:()=> 'test',review:async()=>({decision:'ask_question',question:{question:'When?',options:['Startup','Running','Not sure']},report:{...raw(),soundObservation:'A brief metallic rattle is audible.',audibleConcern:'Brief metallic rattle'}})});
+ const res=response();await handler({method:'POST',body:b},res);
+ assert.equal(res.statusCode,200);assert.equal(res.body.decision,'complete');assert.equal(res.body.report.sessionStatus,'complete');assert.equal(res.body.report.followUpQuestion,null);
+});
+test('follow-up preserves measured evidence and rejects mismatched citations',()=>{
+ const b=followupBody();const input=validateFollowUpRequest(b);
+ assert.match(buildFollowUpPrompt(input),/"rmsDbfs":-40/);
+ b.audioEvidence[0].id='CH0_OTHER';assert.throws(()=>validateFollowUpRequest(b),/evidence/i);
 });
