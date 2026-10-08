@@ -1,3 +1,4 @@
+import {assertNextQuestion,assertCompletionSupported} from '../lib/audio-v3/diagnostic-state.js';
 import {FollowUpInputError,validateFollowUpRequest,requestFollowUp} from '../lib/audio-v3/followup.js';
 import {normalizeReport} from '../lib/audio-v3/report.js';
 
@@ -13,8 +14,10 @@ export function createHandler({review=requestFollowUp,getApiKey=()=>process.env.
   try {
    const prepare=raw=>{
     if(!raw||typeof raw!=='object'||!['ask_question','complete'].includes(raw.decision)) throw new Error('Invalid follow-up decision');
+    assertCompletionSupported(raw,input);
     const ask=raw.decision==='ask_question'&&input.answers.length<3;
     if(ask && input.interviewRequired) {
+     assertNextQuestion(raw.question,input);
      const key=s=>String(s||'').toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
      if(input.answers.some(row=>key(row.question)===key(raw.question?.question))) throw new Error('Repeated follow-up question');
     }
@@ -34,7 +37,7 @@ export function createHandler({review=requestFollowUp,getApiKey=()=>process.env.
    return res.status(200).json(prepare(raw));
   } catch(error) {
    const message=String(error?.message||'');
-   const reason=message==='Invalid follow-up decision'?'INVALID_FOLLOWUP_DECISION':message==='Invalid follow-up question'?'INVALID_FOLLOWUP_QUESTION':
+   const reason=message==='Missing diagnostic discriminator'?'MISSING_DISCRIMINATOR':message==='Redundant follow-up question'?'REDUNDANT_QUESTION':message==='Unsupported report claim'?'UNSUPPORTED_CLAIM':message==='Invalid follow-up decision'?'INVALID_FOLLOWUP_DECISION':message==='Invalid follow-up question'?'INVALID_FOLLOWUP_QUESTION':
     /^Audio follow-up provider HTTP \d{3}$/.test(message)?'PROVIDER_HTTP_ERROR':error?.name==='AbortError'?'PROVIDER_TIMEOUT':'FOLLOWUP_FAILED';
    try {logFailure({phase:'followup',reason,...(error?.field?{field:error.field}:{})});} catch {}
    return res.status(502).json({code:'AUDIO_FOLLOWUP_FAILED',reason});

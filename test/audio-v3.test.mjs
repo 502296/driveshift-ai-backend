@@ -1,3 +1,4 @@
+import {assertNextQuestion,interviewLedger,assertCompletionSupported} from '../lib/audio-v3/diagnostic-state.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHandler} from '../api/audio-diagnose-v3.js';
@@ -463,7 +464,7 @@ test('required interview retains the model-generated sound-specific question',as
  const b=body();b.interviewRequired=true;
  const q={question:'Does this whine occur with the A/C off as well?',options:['Yes','No','Not sure']};
  const r=await call(b,{review:async()=>({...raw(),sessionStatus:'follow_up',followUpQuestion:q})});
- assert.deepEqual(r.body.report.followUpQuestion,q);
+ assert.deepEqual(r.body.report.followUpQuestion,{...q,target:'other'});
 });
 test('required interview has a localized fallback when timing is not known',async()=>{
  const b=body();b.interviewRequired=true;b.language='es';b.recordingContext={};
@@ -587,4 +588,67 @@ test('hypothesis shape failure identifies the missing field without logging audi
  const r=await call(b,{review:async()=>({...raw(),hypotheses:[{title:'Resonance'}]}),logFailure:detail=>{logged=detail;}});
  assert.equal(r.statusCode,502);assert.equal(logged.reason,'INVALID_HYPOTHESES');
  assert.equal(logged.field,'hypotheses[0].supportingEvidenceIds');assert.equal(logged.audio,undefined);
+});
+
+test('startup context blocks a redundant occurrence question but permits phase discrimination',()=>{
+ const input={context:{engineState:'starting',rpmBehavior:'unknown'},answers:[]};
+ assert.throws(()=>assertNextQuestion({question:'Does this metallic rattle continue after the engine starts, or stop once running?'},input),/Redundant/);
+ assert.equal(assertNextQuestion({target:'start_phase',question:'Is the rattle during cranking, or just after the engine fires?'},input),'start_phase');
+});
+test('uncertain answer closes its topic without becoming a positive fact',()=>{
+ const input={context:{engineState:'unknown'},answers:[{question:'Is the rattle during cranking, or after it fires?',target:'start_phase',answer:'Not sure'}]};
+ assert.equal(interviewLedger(input).answers[0].uncertain,true);
+ assert.throws(()=>assertNextQuestion({target:'start_phase',question:'Before or after the engine fires?'},input),/Redundant/);
+ assert.equal(assertNextQuestion({target:'associated_symptoms',question:'Any warning light already noticed?'},input),'associated_symptoms');
+});
+test('strict title remains unresolved without a discriminating ranking basis',()=>{
+ const x=reasoning();const input=validateRequest(body());
+ const r=normalizeReport(x,input,{requireConsistentAssessment:true});
+ assert.equal(r.differential.status,'unresolved');assert.doesNotMatch(r.title,/shield|pulley|tensioner/i);
+ x.differential={status:'leading',basis:'The user localized this same rattle to a visibly loose shield with contact marks.'};
+ assert.match(normalizeReport(x,input,{requireConsistentAssessment:true}).title,/^Possible:/);
+ x.interpretation='Both mechanisms remain equally plausible.';
+ assert.equal(normalizeReport(x,input,{requireConsistentAssessment:true}).differential.status,'unresolved');
+});
+test('startup alone cannot become reported cranking in a strict reason',()=>{
+ const b=body();b.recordingContext={engineState:'starting'};const x=reasoning();
+ x.hypotheses[0].reason='The rattling aligns with engine cranking and disappears once running.';
+ assert.throws(()=>normalizeReport(x,validateRequest(b),{requireConsistentAssessment:true}),/Unsupported report claim/);
+ b.recordingContext.description='The user reports rattling during cranking.';
+ assert.doesNotThrow(()=>normalizeReport(x,validateRequest(b),{requireConsistentAssessment:true}));
+});
+test('initial endpoint asks provider to repair a redundant timing question',async()=>{
+ const b=body();b.interviewRequired=true;b.recordingContext={engineState:'starting'};
+ let calls=0;let repair='';
+ const res=response();await createHandler({getApiKey:()=> 'mock',logFailure:()=>{},review:(input,options)=>requestReview(input,{...options,fetchImpl:async(_url,req)=>{
+  calls++;const sent=JSON.parse(req.body);if(calls===2)repair=sent.messages.at(-1).content;
+  const q=calls===1?{target:'occurrence',question:'Does it stop once running?',options:['Yes','No','Not sure']}:{target:'start_phase',question:'During cranking or just after the engine fires?',options:['During cranking','Just after it fires','Not sure']};
+  return {ok:true,json:async()=>({choices:[{finish_reason:'stop',message:{content:JSON.stringify({...raw(),sessionStatus:'follow_up',followUpQuestion:q})}}]})};
+ }})})({method:'POST',body:b},res);
+ assert.equal(res.statusCode,200);assert.equal(calls,2);assert.match(repair,/DIFFERENT missing observation/);assert.equal(res.body.report.followUpQuestion.target,'start_phase');
+});
+
+test('two startup mechanisms require phase discrimination before completing, within budget',()=>{
+ const input={interviewRequired:true,context:{engineState:'starting'},answers:[{question:'Does it stop once running?',answer:'It stops once running',target:'occurrence'}]};
+ const raw={decision:'complete',report:{hypotheses:[{title:'Accessory belt tensioner rattle'},{title:'Starter engagement noise'}]}};
+ assert.throws(()=>assertCompletionSupported(raw,input),/Missing diagnostic discriminator/);
+ input.answers.push({question:'During cranking or after the engine fires?',target:'start_phase',answer:'Not sure'});
+ assert.doesNotThrow(()=>assertCompletionSupported(raw,input));
+ input.answers=[...input.answers,{question:'Any other symptom?',target:'associated_symptoms',answer:'No'}];
+ assert.doesNotThrow(()=>assertCompletionSupported(raw,input));
+});
+test('follow-up repairs premature completion into a generated phase question',async()=>{
+ const b=followupBody();b.interviewRequired=true;b.recordingContext={engineState:'starting'};
+ b.answers=[{question:'Does it stop once running?',target:'occurrence',answer:'It stops once running'}];
+ const h=(title)=>({title,reason:'A brief startup rattle can fit this mechanism; exact location is unconfirmed.',verification:'A technician should localize the event at startup.',supportingEvidenceIds:[]});
+ const report={...raw(),assessment:'verification_needed',audibleConcern:'Brief metallic rattle',hypotheses:[h('Accessory belt tensioner'),h('Starter engagement')],differential:{status:'unresolved',basis:'The precise phase has not been reported.'}};
+ let calls=0;let repair='';const res=response();
+ await createFollowUpHandler({getApiKey:()=> 'mock',logFailure:()=>{},review:(input,options)=>requestFollowUp(input,{...options,fetchImpl:async(_url,req)=>{
+  calls++;const sent=JSON.parse(req.body);if(calls===2)repair=sent.messages.at(-1).content;
+  const output=calls===1?{decision:'complete',question:null,report}:{decision:'ask_question',question:{target:'start_phase',question:'Does it happen during cranking or just after the engine fires?',options:['During cranking','After it fires','Not sure']},report};
+  return {ok:true,json:async()=>({choices:[{finish_reason:'stop',message:{content:JSON.stringify(output)}}]})};
+ }})})({method:'POST',body:b},res);
+ assert.equal(res.statusCode,200);assert.equal(calls,2);assert.equal(res.body.decision,'ask_question');
+ assert.match(repair,/Missing diagnostic discriminator/);assert.equal(res.body.question.target,'start_phase');
+ assert.equal(res.body.report.soundObservation,b.session.soundObservation);
 });

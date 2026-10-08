@@ -1,3 +1,4 @@
+import {assertNextQuestion} from '../lib/audio-v3/diagnostic-state.js';
 import {startInterview} from '../lib/audio-v3/interview.js';
 import {InputError,validateRequest} from '../lib/audio-v3/contract.js';
 import {requestReview} from '../lib/audio-v3/provider.js';
@@ -14,13 +15,14 @@ export function createHandler({review=requestReview, getApiKey=()=>process.env.O
   if(!getApiKey()) return res.status(503).json({code:'AUDIO_SERVICE_UNAVAILABLE'});
   let phase='provider';
   try {
-   const raw=await review(input,{
-    apiKey:getApiKey(),
-    onStage:stage=>{phase=stage;},
-    validateOutput:value=>normalizeReport(startInterview(value,input),input,{requireConsistentAssessment:input.interviewRequired}),
-   });
+   const prepare=value=>{
+    const started=startInterview(value,input);
+    if(input.interviewRequired && started.sessionStatus==='follow_up') assertNextQuestion(started.followUpQuestion,input);
+    return normalizeReport(started,input,{requireConsistentAssessment:input.interviewRequired});
+   };
+   const raw=await review(input,{apiKey:getApiKey(),onStage:stage=>{phase=stage;},validateOutput:prepare});
    phase='report_validation';
-   return res.status(200).json({report:normalizeReport(startInterview(raw,input),input,{requireConsistentAssessment:input.interviewRequired})});
+   return res.status(200).json({report:prepare(raw)});
   } catch(error) {
    // Only controlled diagnostic codes; never input or provider response text.
    const known={
@@ -29,6 +31,7 @@ export function createHandler({review=requestReview, getApiKey=()=>process.env.O
     'Unsupported report claim':'UNSUPPORTED_CLAIM',
     'Invalid reasoning field':'INVALID_REASONING_FIELD',
     'Invalid hypotheses':'INVALID_HYPOTHESES',
+    'Redundant follow-up question':'REDUNDANT_QUESTION',
     'Invalid hypothesis evidence':'INVALID_HYPOTHESIS_EVIDENCE',
     'Hypotheses conflict with assessment':'CONFLICTING_ASSESSMENT',
     'Invalid provider response':'INVALID_PROVIDER_RESPONSE',
