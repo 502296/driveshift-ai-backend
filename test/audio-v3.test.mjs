@@ -536,3 +536,33 @@ test('required reports accept complete bounded rationale without truncating it',
  const r=normalizeReport(x,validateRequest(body()),{requireConsistentAssessment:true});
  assert.equal(r.hypotheses[0].reason,x.hypotheses[0].reason);assert.equal(r.hypotheses[0].verification,x.hypotheses[0].verification);
 });
+
+
+test('startup alone cannot become a warm-up finding in a strict report',()=>{
+ const input=validateRequest({...body(),recordingContext:{engineState:'starting',description:'Only at startup'}});
+ for(const [field,value] of [['interpretation','The pulley settles as the engine warms.'],['soundObservation','A rattle fades as the engine warms.']]) {
+  assert.throws(()=>normalizeReport({...reasoning(),[field]:value},input,{requireConsistentAssessment:true}),error=>error.message==='Unsupported report claim' && error.field===field);
+ }
+ const x=reasoning();x.hypotheses[0].reason='The tensioner settles as the engine warms.';
+ assert.throws(()=>normalizeReport(x,input,{requireConsistentAssessment:true}),/Unsupported report claim/);
+});
+test('explicit thermal context permits a hypothesis while an unknown answer does not',()=>{
+ const x=reasoning();x.interpretation='The user reports this rattle only on cold starts; its source remains unresolved.';
+ const known=validateRequest({...body(),recordingContext:{engineState:'starting',description:'Only on cold starts'}});
+ assert.equal(normalizeReport(x,known,{requireConsistentAssessment:true}).interpretation,x.interpretation);
+ const unknown=validateRequest({...body(),recordingContext:{engineState:'starting',description:'Not sure whether cold or warm'}});
+ assert.throws(()=>normalizeReport(x,unknown,{requireConsistentAssessment:true}),/Unsupported report claim/);
+});
+test('a proposed thermal comparison remains a check rather than a claimed observation',()=>{
+ const x=reasoning();x.hypotheses[0].verification='A technician can compare cold and warm starts to determine whether temperature affects the event.';
+ assert.equal(normalizeReport(x,validateRequest(body()),{requireConsistentAssessment:true}).hypotheses[0].verification,x.hypotheses[0].verification);
+});
+test('diagnostic prompts distinguish clip timing, temperature and the three belt systems',()=>{
+ const initial=buildPrompt(validateRequest({...body(),interviewRequired:true}));
+ const next=buildFollowUpPrompt(validateFollowUpRequest({...followupBody(),interviewRequired:true}));
+ for(const prompt of [initial,next]) {
+  assert.match(prompt,/timing belt/);assert.match(prompt,/timing chain/);
+  assert.match(prompt,/Only at startup/);assert.match(prompt,/CLIP|clip timeline/);
+  assert.match(prompt,/discriminating/);
+ }
+});
