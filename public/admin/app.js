@@ -21,7 +21,7 @@ async function overview() {
     const data = await r.json();
     $('login').hidden=true; $('dashboard').hidden=false; $('logout').hidden=false;
     $('identity').textContent=`${data.member.email} · ${data.member.role}`;
-    $('window').textContent=data.sampled ? 'Latest 1,000 recorded requests within the last 24 hours (limited sample).' : 'Recorded requests in the last 24 hours.';
+    $('window').textContent=data.sampled ? 'Showing 1,000 recorded requests from the last 24 hours; additional requests may be omitted.' : 'Recorded requests in the last 24 hours.';
     $('requests').textContent=data.requests;
     $('errors').textContent=data.errors;
     $('latency').textContent=data.requests ? (data.averageMs/1000).toFixed(1)+' s' : '—';

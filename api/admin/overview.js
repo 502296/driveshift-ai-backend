@@ -21,6 +21,6 @@ export default async function handler(req, res) {
     const since = new Date(Date.now() - 24*60*60*1000).toISOString();
     // Fetch one extra row to detect truncation; report exactly the displayed sample.
     const rows = await request(`/rest/v1/driveshift_request_events?created_at=gte.${encodeURIComponent(since)}&select=endpoint,http_status,duration_ms,outcome&order=created_at.desc,id.desc&limit=1001`);
-    return res.status(200).json({ member, since, sampled: rows.length > 1000, telemetryEnabled: process.env.DRIVESHIFT_TELEMETRY_ENABLED === 'true', ...summarize(rows.slice(0,1000)) });
+    return res.status(200).json({ member, since, sampled: rows.length >= 1000, telemetryEnabled: process.env.DRIVESHIFT_TELEMETRY_ENABLED === 'true', ...summarize(rows.slice(0,1000)) });
   } catch { return res.status(503).json({ error: 'ADMIN_UNAVAILABLE' }); }
 }
