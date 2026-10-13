@@ -1,4 +1,5 @@
-export default async function handler(req, res) {
+import { withTelemetry } from '../lib/admin/telemetry.js';
+async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ result: "Method not allowed" });
   }
@@ -275,3 +276,5 @@ None
 When to stop driving:
 No driving safety advice from debug mode.`;
 }
+
+export default withTelemetry(handler, 'diagnose-image');
