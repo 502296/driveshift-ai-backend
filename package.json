@@ -1,1 +1,1 @@
-{"name":"driveshift-ai-backend","version":"1.0.0","type":"module"}
+{"name":"driveshift-ai-backend","version":"1.0.0","type":"module","dependencies":{"@vercel/functions":"^3.10.0"}}
