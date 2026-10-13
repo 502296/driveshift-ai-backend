@@ -1,3 +1,4 @@
+import { withTelemetry } from '../lib/admin/telemetry.js';
 import {
   buildDiagnosticContext,
   buildUserEvidenceText,
@@ -1019,7 +1020,7 @@ Do not authorize component replacement solely because a hypothesis ranks HIGH.
    API HANDLER
    ============================================================ */
 
-export default async function handler(
+async function handler(
   req,
   res,
 ) {
@@ -3958,3 +3959,5 @@ Do not suggest unsafe driving experiments or untrained hazardous inspection.
       'The revised report is temporarily unavailable. Please retry.'});
   return res.status(200).json({status:'analysis',report});
 }
+
+export default withTelemetry(handler, 'diagnose');

@@ -1,3 +1,4 @@
+import { withTelemetry } from '../lib/admin/telemetry.js';
 // ============================================================
 // DriveShift Camera V2
 // Visual Evidence Extraction Endpoint
@@ -235,7 +236,7 @@ const VISUAL_EVIDENCE_SCHEMA = {
 // Main handler
 // ============================================================
 
-export default async function handler(req, res) {
+async function handler(req, res) {
   if (req.method !== "POST") {
     return sendError(
       res,
@@ -2472,3 +2473,5 @@ function safeErrorMessage(
     return "Unknown error";
   }
 }
+
+export default withTelemetry(handler, 'camera-visual-evidence');

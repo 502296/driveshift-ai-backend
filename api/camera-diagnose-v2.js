@@ -1,3 +1,4 @@
+import { withTelemetry } from '../lib/admin/telemetry.js';
 // ============================================================
 // DriveShift Camera V2
 // Evidence-Based Diagnostic Reasoning Endpoint
@@ -258,7 +259,7 @@ const DIAGNOSIS_SCHEMA = {
 // Main handler
 // ============================================================
 
-export default async function handler(req, res) {
+async function handler(req, res) {
   if (req.method !== "POST") {
     return sendError(
       res,
@@ -3505,3 +3506,5 @@ function safeErrorMessage(
     return "Unknown error";
   }
 }
+
+export default withTelemetry(handler, 'camera-diagnose-v2');
