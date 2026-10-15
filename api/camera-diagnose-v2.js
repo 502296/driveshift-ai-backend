@@ -1,3 +1,4 @@
+import {cameraImage, mechanicPrompt, mechanicSchema, nextQuestion, CameraImageError} from '../lib/camera/mechanic.js';
 import {normalizeRecognition, normalizeWorkspace} from '../lib/camera/workspace.js';
 import { withTelemetry } from '../lib/admin/telemetry.js';
 // ============================================================
@@ -276,6 +277,12 @@ async function handler(req, res) {
         ? req.body
         : {};
 
+    let originalImage;
+    try { originalImage = cameraImage(body.image); }
+    catch (error) {
+      if (error instanceof CameraImageError) return sendError(res, error.code === 'CAMERA_IMAGE_TOO_LARGE' ? 413 : 400, error.code, error.message);
+      throw error;
+    }
     const language =
       body.language === "es"
         ? "es"
@@ -450,7 +457,7 @@ async function handler(req, res) {
     // 5. Build diagnostic prompt
     // ========================================================
 
-   const prompt =
+   const legacyPrompt =
   buildDiagnosticPrompt({
     language,
     cameraEvidence,
@@ -474,6 +481,10 @@ a supported identity to a generic object, and do not promote a tentative identit
 Do not repeat the same limitation in every section. Avoid precise source or fluid claims
 from a wet surface alone. Keep summary to 2 sentences and each hypothesis reasoning concise.
 `; 
+
+    const prompt = originalImage ? mechanicPrompt({language, evidence:cameraEvidence,
+      vehicle:vehicleProfile, context:normalizedDashboardOperatingContext,
+      workspace, ids:allowedEvidenceIds}) : legacyPrompt;
 
     // ========================================================
     // 6. OpenAI request
@@ -526,7 +537,9 @@ from a wet surface alone. Keep summary to 2 sentences and each hypothesis reason
                         "input_text",
 
                       text:
-                        "Follow the DriveShift Camera V2 diagnostic evidence contract exactly. Never promote a hypothesis beyond the supplied evidence.",
+                        originalImage
+                          ? "Inspect the attached original image. Give specific mechanical reasoning with clear observations versus hypotheses. Follow the structured contract."
+                          : "Follow the DriveShift Camera V2 diagnostic evidence contract exactly. Never promote a hypothesis beyond the supplied evidence.",
                     },
                   ],
                 },
@@ -543,6 +556,7 @@ from a wet surface alone. Keep summary to 2 sentences and each hypothesis reason
                       text:
                         prompt,
                     },
+                    ...(originalImage ? [originalImage] : []),
                   ],
                 },
               ],
@@ -559,7 +573,7 @@ from a wet surface alone. Keep summary to 2 sentences and each hypothesis reason
                     true,
 
                   schema:
-                    DIAGNOSIS_SCHEMA,
+                    originalImage ? mechanicSchema(DIAGNOSIS_SCHEMA) : DIAGNOSIS_SCHEMA,
                 },
               },
 
@@ -623,6 +637,7 @@ from a wet surface alone. Keep summary to 2 sentences and each hypothesis reason
     const openAiData =
       await response.json();
 
+    if (openAiData.status === 'incomplete') return sendError(res, 502, 'INCOMPLETE_CAMERA_DIAGNOSIS', 'The inspection response was incomplete. Try again.');
     const outputText =
       extractResponseText(
         openAiData
@@ -680,7 +695,7 @@ from a wet surface alone. Keep summary to 2 sentences and each hypothesis reason
 
     return res.status(200).json({
       ok: true,
-      diagnosis,
+      diagnosis: originalImage ? {...diagnosis, nextQuestion:nextQuestion(parsed.nextQuestion)} : diagnosis,
     });
   } catch (error) {
     console.error(

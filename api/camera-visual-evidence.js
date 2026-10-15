@@ -1,3 +1,4 @@
+import {visualMechanicPrompt} from '../lib/camera/mechanic.js';
 import {normalizeWorkspace, normalizeVehicleContext, workspaceSchema, workspacePrompt, normalizeRecognition} from '../lib/camera/workspace.js';
 import { withTelemetry } from '../lib/admin/telemetry.js';
 // ============================================================
@@ -388,7 +389,7 @@ async function handler(req, res) {
 
     const workspace = normalizeWorkspace(body.cameraWorkspace);
     const vehicle = normalizeVehicleContext(body.vehicleProfile);
-    const prompt =
+    const legacyPrompt =
       buildVisualEvidencePrompt({
         language,
         evidenceContext,
@@ -396,6 +397,9 @@ async function handler(req, res) {
       }) + (workspace ? workspacePrompt(workspace, vehicle) : "") + `
 CONCISE OUTPUT: Prefer at most 5 distinct observations, 3 interpretations and 4 useful part identities. Keep descriptions to one short sentence, next-photo guidance to 35 words. Do not repeat the same uncertainty across fields. Retain every safety-critical finding even if these preferred counts are exceeded.
 `;
+
+    const prompt = workspace ? visualMechanicPrompt({language, evidence:evidenceContext,
+      vehicle, workspace, ids:allowedEvidenceIds}) : legacyPrompt;
 
     // ========================================================
     // Call OpenAI Responses API
@@ -549,6 +553,7 @@ CONCISE OUTPUT: Prefer at most 5 distinct observations, 3 interpretations and 4 
     const openAiData =
       await response.json();
 
+    if (openAiData.status === 'incomplete') return sendError(res, 502, 'INCOMPLETE_CAMERA_VISUAL_EVIDENCE', 'The image inspection was incomplete. Try again.');
     const outputText =
       extractResponseText(
         openAiData
