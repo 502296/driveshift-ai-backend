@@ -1,3 +1,4 @@
+import {normalizeVehicleHistory, VEHICLE_HISTORY_INSTRUCTIONS} from '../lib/memory/vehicle-history.js';
 import { withTelemetry } from '../lib/admin/telemetry.js';
 import {
   buildDiagnosticContext,
@@ -1044,6 +1045,7 @@ async function handler(
       : "en";
 
   try {
+    const vehicleMemory = normalizeVehicleHistory(req?.body?.vehicleMemory);
     const continuation = normalizeCaseContinuation(req?.body?.continuation);
     const issue =
       sanitizeText(
@@ -1090,7 +1092,7 @@ const structuredObdCodes =
     
     if (continuation) {
       return await handleCaseContinuation({res, lang, issue, answers, vehicleProfile,
-        continuation, modelObdEvidence, structuredObdCodes});
+        continuation, modelObdEvidence, structuredObdCodes, vehicleMemory});
     }
 
     if (
@@ -1201,6 +1203,7 @@ const structuredObdCodes =
     if (!readyForAnalysis) {
       const interviewDecision =
         await requestInterviewDecision({
+          vehicleMemory,
           lang,
 
           userEvidenceText,
@@ -1315,6 +1318,7 @@ const structuredObdCodes =
 
     const report =
       await generateFinalDiagnosticReport({
+        vehicleMemory,
         lang,
 
         userEvidenceText,
@@ -1383,6 +1387,7 @@ const structuredObdCodes =
    ============================================================ */
 
 async function requestInterviewDecision({
+  vehicleMemory = null,
   lang,
   userEvidenceText,
   vehicleProfile,
@@ -1413,6 +1418,9 @@ ${answeredFollowUpCount}/${MAX_FOLLOW_UPS}
 
 VEHICLE
 ${JSON.stringify(vehicleProfile)}
+
+HISTORICAL VEHICLE CONTEXT (not current measurements)
+${JSON.stringify(vehicleMemory)}
 
 USER EVIDENCE
 ${userEvidenceText || "None"}
@@ -1515,7 +1523,7 @@ RECORDS, do not ask for it again.
       DEFAULT_INTERVIEW_MODEL,
 
     instructions:
-      INTERVIEW_INSTRUCTIONS,
+      INTERVIEW_INSTRUCTIONS + (vehicleMemory ? VEHICLE_HISTORY_INSTRUCTIONS : ''),
 
     input,
 
@@ -1546,6 +1554,7 @@ RECORDS, do not ask for it again.
    ============================================================ */
 
 async function generateFinalDiagnosticReport({
+  vehicleMemory = null,
   lang,
   userEvidenceText,
   vehicleProfile,
@@ -1577,6 +1586,9 @@ ${
 
 CONFIRMED VEHICLE PROFILE
 ${JSON.stringify(vehicleProfile)}
+
+HISTORICAL VEHICLE CONTEXT (not current measurements)
+${JSON.stringify(vehicleMemory)}
 
 USER EVIDENCE
 ${userEvidenceText || "None"}
@@ -1629,7 +1641,7 @@ Produce the structured report now.
         DEFAULT_REPORT_MODEL,
 
       instructions:
-        REPORT_INSTRUCTIONS + "\nLater explicit corrections supersede earlier observations. Prior reports and explanations are fallible conclusions, never independent evidence.",
+        REPORT_INSTRUCTIONS + (vehicleMemory ? VEHICLE_HISTORY_INSTRUCTIONS : '') + "\nLater explicit corrections supersede earlier observations. Prior reports and explanations are fallible conclusions, never independent evidence.",
 
       input,
 
@@ -3899,8 +3911,8 @@ const CASE_REPLY_SCHEMA = {
 };
 
 async function handleCaseContinuation({res, lang, issue, answers, vehicleProfile,
-    continuation, modelObdEvidence, structuredObdCodes}) {
-  const instructions = DIAGNOSTIC_INSTRUCTIONS + `
+    continuation, modelObdEvidence, structuredObdCodes, vehicleMemory = null}) {
+  const instructions = DIAGNOSTIC_INSTRUCTIONS + (vehicleMemory ? VEHICLE_HISTORY_INSTRUCTIONS : '') + `
 Continue the SAME saved vehicle case in the requested language.
 The latest user message is the final answer entry. Address it directly.
 Later explicit corrections supersede earlier observations. Questions, previous
@@ -3924,7 +3936,7 @@ confirmed faults without supplied verification. Preserve PID42 versus ATRV
 provenance. Give proportionate safety advice if the latest message warrants it.
 Do not suggest unsafe driving experiments or untrained hazardous inspection.
 `;
-  const input=JSON.stringify({language:lang, vehicleProfile, originalConcern:issue,
+  const input=JSON.stringify({language:lang, vehicleProfile, vehicleMemory, originalConcern:issue,
     answersChronological:answers, previousConclusions:continuation.reports,
     assistantMessages:continuation.messages ?? [], verifiedObdEvidence:modelObdEvidence});
   const decision=await requestStructuredResponse({
@@ -3951,7 +3963,7 @@ Do not suggest unsafe driving experiments or untrained hazardous inspection.
   const obdCodes=extractObdCodes(userEvidenceText);
   const obdInsight=buildObdInsight({code:structuredObdCodes[0] || obdCodes[0] || '',
     liveData:parseLiveDataContext(userEvidenceText)});
-  const report=await generateFinalDiagnosticReport({lang,userEvidenceText,vehicleProfile,
+  const report=await generateFinalDiagnosticReport({lang,userEvidenceText,vehicleProfile,vehicleMemory,
     diagnosticContext,obdCodes,obdInsight,modelObdEvidence,structuredObdCodes,
     continuationContext:continuation,reportTimeoutMs:40000});
   if (!report) return res.status(503).json({status:'error',code:'ANALYSIS_UNAVAILABLE',

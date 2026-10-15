@@ -48,3 +48,10 @@ test('non-automotive image returns its explanation without forcing driving advic
  const r=clone();r.visualEvidence={...r.visualEvidence,state:'no_relevant_visual_evidence',observations:[],interpretations:[],components:[],nextPhoto:''};r.diagnosis={...r.diagnosis,state:'insufficient_evidence',summary:'No automotive part or warning is visible.',hypotheses:[],verificationSteps:[],nextQuestion:''};r.display={title:'No vehicle detail visible',nextStep:'Photograph the relevant part or dashboard symbol.',drivingAdvice:'',urgencyLabel:'',imageType:'other'};
  const x=validateInspection(r);assert.equal(x.display.drivingAdvice,'');assert.equal(x.visualEvidence.components.length,0);assert.equal(x.diagnosis.hypotheses.length,0);
 });
+
+test('camera sees historical summaries separately and keeps a single original image request',async()=>{
+ const vehicleMemory={version:1,vehicleId:'a'.repeat(32),events:[{id:'b'.repeat(32),type:'maintenance',source:'maintenance_user_record',at:'2026-01-01T00:00:00Z',title:'Oil service',summary:'User marked oil service complete.',token:'must-not-leak'}]};
+ const x=await call({image,cameraEvidence:local,vehicleMemory});assert.equal(x.calls,1);assert.equal(x.output.statusCode,200);
+ const user=JSON.parse(x.payload.input[1].content[0].text);assert.equal(user.vehicleMemory.events[0].historical,true);assert.ok(!JSON.stringify(x.payload).includes('must-not-leak'));
+ assert.equal(x.payload.input.flatMap(m=>m.content).filter(c=>c.type==='input_image').length,1);
+});

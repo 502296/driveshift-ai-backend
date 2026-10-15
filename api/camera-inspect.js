@@ -1,3 +1,4 @@
+import {normalizeVehicleHistory, VEHICLE_HISTORY_INSTRUCTIONS} from '../lib/memory/vehicle-history.js';
 import {withTelemetry} from '../lib/admin/telemetry.js';
 import {cameraImage, CameraImageError} from '../lib/camera/mechanic.js';
 import {normalizeWorkspace, normalizeVehicleContext} from '../lib/camera/workspace.js';
@@ -20,6 +21,7 @@ export async function handler(req,res) {
     if (!local) return fail(res,400,'CAMERA_EVIDENCE_REQUIRED','Valid image-quality metadata is required.');
     if (local.imageQuality.state === 'unusable') return fail(res,422,'CAMERA_IMAGE_UNUSABLE','Retake the image with better lighting and a steady camera.');
     if (!process.env.OPENAI_API_KEY) return fail(res,503,'CAMERA_NOT_CONFIGURED','Inspection is temporarily unavailable.');
+    const vehicleMemory=normalizeVehicleHistory(body.vehicleMemory);
     const controller=new AbortController();
     timer=setTimeout(()=>controller.abort(),40000);
     const model=process.env.DRIVESHIFT_CAMERA_INSPECTION_MODEL || process.env.DRIVESHIFT_CAMERA_DIAGNOSIS_MODEL || 'gpt-5.6-sol';
@@ -28,9 +30,9 @@ export async function handler(req,res) {
       method:'POST',signal:controller.signal,
       headers:{'Content-Type':'application/json',Authorization:`Bearer ${process.env.OPENAI_API_KEY}`},
       body:JSON.stringify({model,store:false,
-        input:[{role:'developer',content:[{type:'input_text',text:INSPECTION_PROMPT}]},
+        input:[{role:'developer',content:[{type:'input_text',text:INSPECTION_PROMPT+(vehicleMemory?VEHICLE_HISTORY_INSTRUCTIONS:'')}]},
           {role:'user',content:[{type:'input_text',text:JSON.stringify({language:body.language==='es'?'Spanish':'English',
-            vehicle:normalizeVehicleContext(body.vehicleProfile),userFocus:normalizeWorkspace(body.cameraWorkspace),
+            vehicle:normalizeVehicleContext(body.vehicleProfile),vehicleMemory,userFocus:normalizeWorkspace(body.cameraWorkspace),
             imageQuality:local.imageQuality.state})},image]}],
         text:{format:{type:'json_schema',name:'driveshift_camera_inspection_v1',strict:true,schema:INSPECTION_SCHEMA}},max_output_tokens:4000}),
     });
