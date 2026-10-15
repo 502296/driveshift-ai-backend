@@ -29,3 +29,22 @@ test('unsupported component reference invalidates output',()=>{const r=clone();r
 test('unknown image can return retake guidance without forced fault',()=>{const r=clone();r.visualEvidence={...r.visualEvidence,state:'insufficient_image_quality',observations:[],components:[]};r.diagnosis={...r.diagnosis,state:'insufficient_evidence',hypotheses:[]};r.display.title='Image too blurred';r.display.nextStep='Retake closer with steady lighting.';const x=validateInspection(r);assert.equal(x.diagnosis.hypotheses.length,0);assert.equal(x.display.drivingAdvice,'');});
 test('rate limit, malformed output and network errors stay stable and redact private upstream messages',async()=>{for(const options of [{status:429},{response:{output_text:'invalid'}},{network:true}]){const x=await call(undefined,options);assert.ok([429,502].includes(x.output.statusCode));assert.ok(!JSON.stringify(x.output.payload).includes('private service'));}});
 test('schema defines exact parts support and structured report fields',()=>{assert.ok(INSPECTION_SCHEMA.properties.visualEvidence.properties.components.items.required.includes('supportingObservationIds'));assert.ok(INSPECTION_SCHEMA.properties.display.required.includes('drivingAdvice'));});
+
+test('report contract preserves concise actions for diverse supported scenes without changing model access',async()=>{
+ const scenes=[
+  {kind:'bulgeOrDeformation',name:'Tire sidewall',title:'Sidewall bulge',summary:'A localized outward bulge is visible on the tire sidewall.',next:'Arrange tire replacement and inspection.',driving:'Do not drive on the bulged tire.',type:'mechanical',assessment:'abnormal_condition'},
+  {kind:'wetOrReflectiveArea',name:'Differential cover',title:'Likely cover-seal leak',summary:'Wet residue follows the lower cover joint.',next:'Verify lubricant level and clean the joint to trace fresh residue.',driving:'Avoid driving if the level is low or leakage is rapid.',type:'mechanical',assessment:'uncertain'},
+  {kind:'unknown',name:'Hose connection',title:'No visible damage at this connection',summary:'The visible hose and clamp appear seated without visible residue.',next:'If a symptom persists, describe when it occurs.',driving:'',type:'mechanical',assessment:'normal_condition'},
+  {kind:'visibleSymbol',name:'Oil-pressure warning',title:'Oil-pressure warning',summary:'The red oil-can symbol warns about engine lubrication pressure.',next:'Check oil level; if normal, arrange pressure testing.',driving:'If it stays on with the engine running, stop safely and switch off.',type:'dashboard',assessment:'uncertain'},
+ ];
+ for(const scene of scenes){
+  const r=clone();r.visualEvidence.observations[0].kind=scene.kind;r.visualEvidence.observations[0].description=scene.summary;r.visualEvidence.components[0].name=scene.name;
+  r.diagnosis.summary=scene.summary;r.diagnosis.assessmentClass=scene.assessment;r.diagnosis.hypotheses[0].title=scene.title;r.diagnosis.hypotheses[0].reasoning=scene.summary;r.diagnosis.nextQuestion='';
+  r.display={title:scene.title,nextStep:scene.next,drivingAdvice:scene.driving,urgencyLabel:scene.driving?'Inspection guidance':'',imageType:scene.type};
+  const x=await call(undefined,{raw:r});assert.equal(x.output.statusCode,200,scene.name);assert.equal(x.calls,1);assert.equal(x.output.payload.display.drivingAdvice,scene.driving);assert.equal(x.output.payload.diagnosis.summary,scene.summary);assert.equal(x.output.payload.visualEvidence.components[0].name,scene.name);
+ }
+});
+test('non-automotive image returns its explanation without forcing driving advice or invented parts',()=>{
+ const r=clone();r.visualEvidence={...r.visualEvidence,state:'no_relevant_visual_evidence',observations:[],interpretations:[],components:[],nextPhoto:''};r.diagnosis={...r.diagnosis,state:'insufficient_evidence',summary:'No automotive part or warning is visible.',hypotheses:[],verificationSteps:[],nextQuestion:''};r.display={title:'No vehicle detail visible',nextStep:'Photograph the relevant part or dashboard symbol.',drivingAdvice:'',urgencyLabel:'',imageType:'other'};
+ const x=validateInspection(r);assert.equal(x.display.drivingAdvice,'');assert.equal(x.visualEvidence.components.length,0);assert.equal(x.diagnosis.hypotheses.length,0);
+});
