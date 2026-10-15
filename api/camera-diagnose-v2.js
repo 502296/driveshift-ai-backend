@@ -3538,3 +3538,5 @@ function safeErrorMessage(
 }
 
 export default withTelemetry(handler, 'camera-diagnose-v2');
+
+export {DIAGNOSIS_SCHEMA, normalizeDiagnosis};

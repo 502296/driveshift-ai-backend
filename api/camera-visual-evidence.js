@@ -2485,3 +2485,5 @@ function safeErrorMessage(
 }
 
 export default withTelemetry(handler, 'camera-visual-evidence');
+
+export {VISUAL_EVIDENCE_SCHEMA, normalizeLocalCameraEvidence, normalizeVisualEvidence, extractResponseText};
