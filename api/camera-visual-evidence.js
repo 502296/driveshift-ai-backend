@@ -1,3 +1,4 @@
+import {normalizeWorkspace, normalizeVehicleContext, workspaceSchema, workspacePrompt, normalizeRecognition} from '../lib/camera/workspace.js';
 import { withTelemetry } from '../lib/admin/telemetry.js';
 // ============================================================
 // DriveShift Camera V2
@@ -385,12 +386,14 @@ async function handler(req, res) {
     // Build strict visual prompt
     // ========================================================
 
+    const workspace = normalizeWorkspace(body.cameraWorkspace);
+    const vehicle = normalizeVehicleContext(body.vehicleProfile);
     const prompt =
       buildVisualEvidencePrompt({
         language,
         evidenceContext,
         allowedEvidenceIds,
-      });
+      }) + (workspace ? workspacePrompt(workspace, vehicle) : "");
 
     // ========================================================
     // Call OpenAI Responses API
@@ -480,12 +483,12 @@ async function handler(req, res) {
                     true,
 
                   schema:
-                    VISUAL_EVIDENCE_SCHEMA,
+                    workspace ? workspaceSchema(VISUAL_EVIDENCE_SCHEMA) : VISUAL_EVIDENCE_SCHEMA,
                 },
               },
 
               max_output_tokens:
-                2200,
+                workspace ? 3600 : 2200,
             }),
           }
         );
@@ -593,7 +596,7 @@ async function handler(req, res) {
 
     return res.status(200).json({
       ok: true,
-      visualEvidence,
+      visualEvidence: workspace ? {...visualEvidence, ...normalizeRecognition(parsed, visualEvidence.observations), workspaceVersion: 1} : visualEvidence,
     });
   } catch (error) {
     console.error(
