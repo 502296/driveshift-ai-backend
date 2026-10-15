@@ -393,7 +393,9 @@ async function handler(req, res) {
         language,
         evidenceContext,
         allowedEvidenceIds,
-      }) + (workspace ? workspacePrompt(workspace, vehicle) : "");
+      }) + (workspace ? workspacePrompt(workspace, vehicle) : "") + `
+CONCISE OUTPUT: Prefer at most 5 distinct observations, 3 interpretations and 4 useful part identities. Keep descriptions to one short sentence, next-photo guidance to 35 words. Do not repeat the same uncertainty across fields. Retain every safety-critical finding even if these preferred counts are exceeded.
+`;
 
     // ========================================================
     // Call OpenAI Responses API
