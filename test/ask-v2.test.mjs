@@ -203,3 +203,28 @@ test('learning endpoint rejects arbitrary queries and writes', async () => {
   await learningHandler({ method: 'POST', query: {} }, b);
   assert.equal(b.statusCode, 405);
 });
+
+test('unknown RPM response is not re-asked as an idle-speed rhythm', async () => {
+  const res = await runCase({ experienceVersion: 2,
+    issue: 'Intermittent chirp while stationary with the engine idling.',
+    answers: [{ question: 'Does it change when you raise engine speed?',
+      answer: 'I have not checked whether it changes with engine speed.' }],
+  }, [{ status: 'follow_up',
+    question: 'Does the chirp recur in a pattern tied to the engine’s idle speed?',
+    readiness: 'needs_observation', missingInformation: ['Rhythm'], nextVerification: '',
+  }]);
+  assert.equal(res.body.status, 'follow_up');
+  assert.match(res.body.question, /dashboard warning lights/);
+});
+
+test('known stationary idling does not trigger the generic operating-condition fallback', async () => {
+  const res = await runCase({ experienceVersion: 2,
+    issue: 'An intermittent whistle while stationary with the engine idling.',
+    answers: [{ question: 'Does the chirp change with engine speed?', answer: 'I do not know' }],
+  }, [{ status: 'follow_up',
+    question: 'Under what condition does the symptom happen most clearly?',
+    readiness: 'needs_observation', missingInformation: ['Conditions'], nextVerification: '',
+  }]);
+  assert.equal(res.body.status, 'follow_up');
+  assert.match(res.body.question, /dashboard warning lights/);
+});

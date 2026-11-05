@@ -3175,6 +3175,21 @@ function buildNaturalFallbackQuestion({
     );
   }
 
+  if (/chirp|whistl|squeal|noise|ruido|silbido|chirrido/.test(lower)) {
+    addCandidates(
+      [
+        'Have you noticed any dashboard warning lights while the sound occurs?',
+        'Is the sound more noticeable just after a cold start or after the engine warms up?',
+        'Have you noticed whether switching the air conditioning off changes the sound?',
+      ],
+      [
+        '¿Has notado alguna luz de advertencia en el tablero cuando aparece el ruido?',
+        '¿El ruido se nota más al arrancar en frío o después de calentarse el motor?',
+        '¿Has notado si apagar el aire acondicionado cambia el ruido?',
+      ],
+    );
+  }
+
   if (!candidates.length) {
     addCandidates(
       [
@@ -3316,6 +3331,12 @@ function isQuestionAnsweredByEvidence(
   question,
   evidenceText,
 ) {
+  // A broad operating-condition fallback adds nothing when the owner already
+  // supplied one. More specific comparisons remain eligible independently.
+  if (/(under what condition|en qu[eé] condici[oó]n)/i.test(question) &&
+      /\b(stationary|idling|idle|while braking|during acceleration|detenido|ralent[ií])\b/i.test(evidenceText)) {
+    return true;
+  }
   const questionTopicList =
     questionTopics(
       question,
@@ -3353,7 +3374,7 @@ function questionTopics(
   const topics = [];
 
   if (
-    /(rpm|engine speed|revoluciones|velocidad del motor)/.test(
+    /(rpm|engine[’']?s? (?:idle )?speed|idle speed|revoluciones|velocidad del motor)/.test(
       text,
     )
   ) {
