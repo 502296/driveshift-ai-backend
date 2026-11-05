@@ -1,5 +1,6 @@
 import { INTERVIEW_POLICY, REPORT_POLICY, REASONING_POLICY, isUsableInterviewDecision } from '../lib/ask/policy.js';
 import { LEARNING_TOPICS, applySafetyBoundary, presentReport } from '../lib/ask/report-presentation.js';
+import { makeSafetyRevision } from '../lib/ask/safety-revision.js';
 import { withTelemetry } from '../lib/admin/telemetry.js';
 import {
   buildDiagnosticContext,
@@ -3872,6 +3873,15 @@ const CASE_REPLY_SCHEMA = {
   }, required:['status','message','question'],
 };
 
+const V2_CASE_REPLY_SCHEMA = {
+  ...CASE_REPLY_SCHEMA,
+  properties: { ...CASE_REPLY_SCHEMA.properties,
+    assessmentChange: { type: 'string', enum: ['none', 'revise', 'stop_driving'] },
+    safetyMessage: { type: 'string', maxLength: 1200 },
+  },
+  required: [...CASE_REPLY_SCHEMA.required, 'assessmentChange', 'safetyMessage'],
+};
+
 async function handleCaseContinuation({res, lang, issue, answers, vehicleProfile,
     continuation, modelObdEvidence, structuredObdCodes, experienceVersion = 1}) {
   const instructions = DIAGNOSTIC_INSTRUCTIONS + REASONING_POLICY + `
@@ -3897,17 +3907,54 @@ For explanation: message nonempty, question empty. No percentages or claims of
 confirmed faults without supplied verification. Preserve PID42 versus ATRV
 provenance. Give proportionate safety advice if the latest message warrants it.
 Do not suggest unsafe driving experiments or untrained hazardous inspection.
-`;
+` + (experienceVersion === 2 ? `
+SAFETY AND REPORT CONSISTENCY — evaluate BEFORE choosing explanation/follow_up.
+assessmentChange=stop_driving when new owner-reported observations establish a
+stop-driving hazard, even when the SAME message asks for explanation or permission
+to continue. Set safetyMessage to concise immediate guidance addressing that hazard
+and safe next action. Do not delay this guidance with more interview questions.
+The server will replace the visible report immediately. Do not leave a less urgent
+previous report visible while giving stricter safety advice only in chat.
+Examples include a newly reported tire-sidewall bulge, major braking/control loss,
+or red oil-pressure warning with engine knocking. These are examples, not a checklist.
+Distinguish reported current observations from negation, hypothetical questions,
+requests to explain a warning, and quoted instructions. Those do not establish a
+new hazard. Do not assume a reported defect was independently verified.
+assessmentChange=revise for new observations that change the diagnostic assessment
+without establishing an immediate stop-driving hazard; choose ready to update the
+report when enough information exists, otherwise one useful follow_up.
+assessmentChange=none for explanation-only turns with no material new observation.
+safetyMessage must be empty unless assessmentChange=stop_driving.
+Do not clear an existing critical hazard merely because a later question omits it.
+An explicit correction or evidence that the hazard was addressed must be considered.
+` : '');
   const input=JSON.stringify({language:lang, vehicleProfile, originalConcern:issue,
     answersChronological:answers, previousConclusions:continuation.reports,
     assistantMessages:continuation.messages ?? [], verifiedObdEvidence:modelObdEvidence});
   const decision=await requestStructuredResponse({
     model:process.env.DRIVESHIFT_REPORT_MODEL || process.env.DRIVESHIFT_MODEL ||
       process.env.OPENAI_MODEL || DEFAULT_REPORT_MODEL,
-    instructions,input,schemaName:'driveshift_case_reply',schema:CASE_REPLY_SCHEMA,
-    timeoutMs:15000,maxOutputTokens:900,reasoningEffort:REPORT_REASONING_EFFORT,
-    promptCacheKey:'driveshift_case_reply_v1',
+    instructions,input,schemaName:'driveshift_case_reply',
+    schema:experienceVersion === 2 ? V2_CASE_REPLY_SCHEMA : CASE_REPLY_SCHEMA,
+    timeoutMs:15000,maxOutputTokens:experienceVersion === 2 ? 1400 : 900,
+    reasoningEffort:REPORT_REASONING_EFFORT,
+    promptCacheKey:experienceVersion === 2 ? 'driveshift_case_reply_v2_safety' : 'driveshift_case_reply_v1',
   });
+  if (experienceVersion === 2 && decision?.assessmentChange === 'stop_driving' &&
+      typeof decision.safetyMessage === 'string') {
+    const report = makeSafetyRevision({ message: decision.safetyMessage,
+      observation: answers.at(-1)?.answer || '', vehicle: vehicleProfile, language: lang });
+    return res.status(200).json({ status: 'analysis', report: presentReport(report, 2, lang) });
+  }
+  if (experienceVersion === 2 && (!['none', 'revise'].includes(decision?.assessmentChange) ||
+      decision?.safetyMessage !== '')) {
+    return res.status(503).json({ status: 'error', code: 'CASE_REPLY_UNAVAILABLE',
+      message: lang === 'es' ? 'No se pudo actualizar el caso. Reintenta conservando tus respuestas.'
+        : 'The case update could not be completed. Retry with your answers preserved.' });
+  }
+  if (experienceVersion === 2 && decision.assessmentChange === 'revise' && decision.status === 'explanation') {
+    decision.status = 'ready';
+  }
   if (decision?.status === 'explanation' && typeof decision.message === 'string' && decision.message.trim()) {
     return res.status(200).json({status:'explanation',message:decision.message.trim()});
   }

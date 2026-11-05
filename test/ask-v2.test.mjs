@@ -146,7 +146,7 @@ test('saved-case regeneration cannot extract a DTC from an unanswered question p
     { question: 'Have you measured code P0300?', answer: 'No' },
     { question: '', answer: 'Update the report.' },
   ], continuation: { sessionId: 'fixture', reports: [reportFixture()], messages: [] } }, [
-    { status: 'ready', message: '', question: '' }, reportFixture(),
+    { status: 'ready', message: '', question: '', assessmentChange: 'revise', safetyMessage: '' }, reportFixture(),
   ], (request, index) => {
     if (index === 1) {
       assert.match(request.input, /OBD CODES\nNone/);
@@ -185,7 +185,7 @@ test('removed videos and unsupported topics/languages are hidden without a model
   assert.deepEqual(await get('belt_noise'), []);
   assert.deepEqual(await get('obd_codes', 'es'), []);
   assert.deepEqual(await get('https://evil.example'), []);
-  assert.equal(calls, 1);
+  assert.equal(calls, 3);
 });
 
 test('learning failure is isolated and concurrent reads share one availability request', async () => {
@@ -202,6 +202,34 @@ test('learning endpoint rejects arbitrary queries and writes', async () => {
   const b = response();
   await learningHandler({ method: 'POST', query: {} }, b);
   assert.equal(b.statusCode, 405);
+});
+
+test('publisher availability checks only fixed video paths and requires a video MIME type', async () => {
+  const calls = [];
+  const get = createLearningService({ fetchImpl: async (url, options) => {
+    calls.push({ url, method: options.method });
+    assert.equal(new URL(url).host, 'go.gates.com');
+    assert.equal(options.method, 'HEAD');
+    assert.equal(options.redirect, 'error');
+    return new Response('', { headers: { 'content-type': 'video/mp4' } });
+  } });
+  const items = await get('cooling', 'es');
+  assert.equal(items.length, 1);
+  assert.equal(items[0].platform, 'publisher');
+  assert.equal(items[0].language, 'es');
+  assert.match(items[0].url, /Cooling.*ES%20V01\.mp4$/);
+  assert.equal(calls.length, 1);
+  const notVideo = createLearningService({ fetchImpl: async () => new Response('<html>blocked</html>', {
+    headers: { 'content-type': 'text/html' },
+  }) });
+  assert.deepEqual(await notVideo('cooling', 'en'), []);
+});
+
+test('critical reports prioritize the safety action and omit optional videos', () => {
+  const report = reportFixture();
+  report.assessment = 'STOP_DRIVING';
+  report.safety.alertLevel = 'CRITICAL';
+  assert.equal(presentReport(report, 2).learning.topic, 'none');
 });
 
 test('unknown RPM response is not re-asked as an idle-speed rhythm', async () => {
@@ -241,6 +269,43 @@ test('v2 provider failure cannot masquerade as a generic fallback interview', as
   assert.equal(res.statusCode, 503);
   assert.equal(res.body.code, 'INTERVIEW_UNAVAILABLE');
   assert.equal(res.body.question, undefined);
+});
+
+test('new stop-driving observation replaces the visible report even in an explanation turn', async () => {
+  const res = await runCase({ experienceVersion: 2, issue: 'Steering-wheel vibration after a pothole.',
+    answers: [{ question: '', answer: 'I now see a bulge on the front tire sidewall. Can I drive 40 miles slowly?' }],
+    continuation: { sessionId: 'fixture', reports: [reportFixture()], messages: [] },
+  }, [{ status: 'explanation', message: 'Do not drive on that tire.', question: '',
+    assessmentChange: 'stop_driving', safetyMessage: 'Do not drive on that tire. Arrange roadside assistance or towing.' }], request => {
+    assert.ok(request.text.format.schema.required.includes('assessmentChange'));
+    assert.match(request.instructions, /SAME message asks for explanation/);
+  });
+  assert.equal(res.body.status, 'analysis');
+  assert.equal(res.body.report.assessment, 'STOP_DRIVING');
+  assert.equal(res.body.report.safety.alertLevel, 'CRITICAL');
+  assert.match(res.body.report.primaryFinding, /Do not drive/);
+  assert.match(res.body.report.evidence[0].observation, /bulge/);
+  assert.deepEqual(res.body.report.hypotheses, []);
+  assert.equal(res.body.report.learning.topic, 'none');
+});
+
+test('explanation without a new hazard stays an explanation and does not invent a revision', async () => {
+  const res = await runCase({ experienceVersion: 2, issue: 'Noise.',
+    answers: [{ question: '', answer: 'Why does the report say to stop if a tire has a bulge? Mine does not.' }],
+    continuation: { sessionId: 'fixture', reports: [reportFixture()], messages: [] },
+  }, [{ status: 'explanation', message: 'That is a conditional warning, not an observed tire defect.',
+    question: '', assessmentChange: 'none', safetyMessage: '' }]);
+  assert.equal(res.body.status, 'explanation');
+  assert.equal(res.body.report, undefined);
+});
+
+test('material assessment change cannot remain hidden in explanation text', async () => {
+  const res = await runCase({ experienceVersion: 2, issue: 'Noise.',
+    answers: [{ question: '', answer: 'The technician found the belt alignment is wrong. Update this.' }],
+    continuation: { sessionId: 'fixture', reports: [reportFixture()], messages: [] },
+  }, [{ status: 'explanation', message: 'This changes the diagnostic direction.', question: '',
+    assessmentChange: 'revise', safetyMessage: '' }, reportFixture()]);
+  assert.equal(res.body.status, 'analysis');
 });
 
 test('v2 report uses a reasoning budget and bounded repair instead of a question quota', async () => {
