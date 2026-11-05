@@ -212,9 +212,14 @@ test('unknown RPM response is not re-asked as an idle-speed rhythm', async () =>
   }, [{ status: 'follow_up',
     question: 'Does the chirp recur in a pattern tied to the engine’s idle speed?',
     readiness: 'needs_observation', missingInformation: ['Rhythm'], nextVerification: '',
-  }]);
+  }, { status: 'follow_up', question: 'Have any dashboard warning lights appeared with this sound?',
+    readiness: 'needs_observation', missingInformation: ['Warnings'], nextVerification: '',
+  }], (request, call) => {
+    assert.equal(request.reasoning.effort, 'low');
+    if (call === 1) assert.match(request.instructions, /QUALITY REPAIR/);
+  });
   assert.equal(res.body.status, 'follow_up');
-  assert.match(res.body.question, /dashboard warning lights/);
+  assert.equal(res.body.question, 'Have any dashboard warning lights appeared with this sound?');
 });
 
 test('known stationary idling does not trigger the generic operating-condition fallback', async () => {
@@ -224,7 +229,28 @@ test('known stationary idling does not trigger the generic operating-condition f
   }, [{ status: 'follow_up',
     question: 'Under what condition does the symptom happen most clearly?',
     readiness: 'needs_observation', missingInformation: ['Conditions'], nextVerification: '',
+  }, { status: 'follow_up', question: 'Have any dashboard warning lights appeared with this sound?',
+    readiness: 'needs_observation', missingInformation: ['Warnings'], nextVerification: '',
   }]);
   assert.equal(res.body.status, 'follow_up');
   assert.match(res.body.question, /dashboard warning lights/);
+});
+
+test('v2 provider failure cannot masquerade as a generic fallback interview', async () => {
+  const res = await runCase({ experienceVersion: 2, issue: 'There is an intermittent noise.', answers: [] }, [null]);
+  assert.equal(res.statusCode, 503);
+  assert.equal(res.body.code, 'INTERVIEW_UNAVAILABLE');
+  assert.equal(res.body.question, undefined);
+});
+
+test('v2 report uses a reasoning budget and bounded repair instead of a question quota', async () => {
+  const duplicate = { status: 'follow_up', question: 'Does the sound change with engine speed?',
+    readiness: 'needs_observation', missingInformation: ['RPM'], nextVerification: '' };
+  const res = await runCase({ experienceVersion: 2, issue: 'Noise while idling.',
+    answers: [{ question: duplicate.question, answer: 'I do not know' }],
+  }, [duplicate, duplicate, reportFixture()], (request, call) => {
+    if (call === 2) assert.equal(request.reasoning.effort, 'medium');
+  });
+  assert.equal(res.body.status, 'analysis');
+  assert.equal(res.body.report.safety.alertLevel, 'CAUTION');
 });
