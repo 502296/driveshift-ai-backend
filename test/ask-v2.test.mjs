@@ -314,8 +314,40 @@ test('v2 report uses a reasoning budget and bounded repair instead of a question
   const res = await runCase({ experienceVersion: 2, issue: 'Noise while idling.',
     answers: [{ question: duplicate.question, answer: 'I do not know' }],
   }, [duplicate, duplicate, reportFixture()], (request, call) => {
-    if (call === 2) assert.equal(request.reasoning.effort, 'medium');
+    if (call === 2) assert.equal(request.reasoning.effort, 'low');
   });
   assert.equal(res.body.status, 'analysis');
   assert.equal(res.body.report.safety.alertLevel, 'CAUTION');
+});
+
+
+test('initial V2 critical action returns after one model call', async () => {
+  const decision = {status:'ready', question:'', readiness:'urgent_action',
+    nextVerification:'Stop safely, turn the engine off and arrange towing. Do not open the hot cooling system.', missingInformation:[]};
+  const res = await runCase({experienceVersion:2, issue:'Red temperature warning and steam now.'}, [decision]);
+  assert.equal(res.body.report.assessment, 'STOP_DRIVING');
+  assert.equal(res.body.report.safety.alertLevel, 'CRITICAL');
+  assert.match(res.body.report.primaryFinding, /turn the engine off/);
+  assert.equal(res.body.report.learning.topic, 'none');
+});
+
+test('compact V2 generation omits discarded fields but restores identity and handoff', async () => {
+  const compact = reportFixture();
+  for (const key of ['vehicle','schemaVersion','confidence','technicianHandoff','whyAlternativesRankLower']) delete compact[key];
+  for (const item of compact.evidence) delete item.strength;
+  for (const item of compact.hypotheses) delete item.likelihood;
+  const res = await runCase({experienceVersion:2, issue:'Engine chirp.', vehicleProfile:{make:'Toyota',model:'Camry'},
+    answers:[{question:'Where?',answer:'Engine bay'},{question:'When?',answer:'At idle'},{question:'Temperature?',answer:'Unknown'}]},
+    [compact], request => {
+      const schema = request.text.format.schema;
+      assert.equal(schema.properties.vehicle, undefined);
+      assert.equal(schema.properties.confidence, undefined);
+      assert.equal(schema.properties.hypotheses.items.properties.likelihood, undefined);
+      assert.equal(schema.properties.primaryFinding.maxLength, 320);
+      assert.equal(request.reasoning.effort, 'low');
+    });
+  assert.equal(res.statusCode,200);
+  assert.equal(res.body.report.vehicle.make,'Toyota');
+  assert.match(res.body.report.technicianHandoff,/Chirp/);
+  assert.equal(res.body.report.schemaVersion,'2.0');
 });

@@ -1,3 +1,4 @@
+import { compactReportSchema, COMPACT_REPORT_POLICY } from '../lib/ask/compact-report.js';
 import { INTERVIEW_POLICY, REPORT_POLICY, REASONING_POLICY, isUsableInterviewDecision } from '../lib/ask/policy.js';
 import { LEARNING_TOPICS, applySafetyBoundary, presentReport } from '../lib/ask/report-presentation.js';
 import { makeSafetyRevision } from '../lib/ask/safety-revision.js';
@@ -1150,6 +1151,11 @@ const structuredObdCodes =
             interviewDecision = null;
           }
         }
+        if (interviewDecision?.status === 'ready' && interviewDecision.readiness === 'urgent_action') {
+          const immediate = makeSafetyRevision({ message: interviewDecision.nextVerification,
+            observation: userEvidenceText, vehicle: vehicleProfile, language: lang });
+          return res.status(200).json({status: 'analysis', report: presentReport(immediate, 2, lang)});
+        }
         if (interviewDecision?.status === 'follow_up') {
           return res.status(200).json({ status: 'follow_up', question: interviewDecision.question.trim() });
         }
@@ -1463,7 +1469,7 @@ RECORDS, do not ask for it again.
         : DEFAULT_INTERVIEW_MODEL),
 
     instructions:
-      INTERVIEW_INSTRUCTIONS + (rejectedQuestion
+      INTERVIEW_INSTRUCTIONS + (experienceVersion === 2 ? '\nFor readiness=urgent_action, reserve it for a current stop-driving or engine-shutdown hazard. Set status=ready, question empty, and nextVerification to immediate plain-language safety guidance and a safe next action. This guidance is shown immediately, without waiting for a full report. Negated or hypothetical hazards do not qualify.' : '') + (rejectedQuestion
         ? '\nQUALITY REPAIR: The rejected question duplicates an established or unavailable distinction. Ask one DIFFERENT useful owner-observable distinction, or return ready if none is useful. Do not merely reword it. Do not fill a question quota.'
         : ''),
 
@@ -1583,7 +1589,7 @@ Produce the structured report now.
         DEFAULT_REPORT_MODEL,
 
       instructions:
-        REPORT_INSTRUCTIONS + "\n" + REPORT_POLICY + "\nLater explicit corrections supersede earlier observations. Prior reports and explanations are fallible conclusions, never independent evidence.",
+        REPORT_INSTRUCTIONS + "\n" + REPORT_POLICY + (experienceVersion === 2 ? COMPACT_REPORT_POLICY : "") + "\nLater explicit corrections supersede earlier observations. Prior reports and explanations are fallible conclusions, never independent evidence.",
 
       input,
 
@@ -1591,25 +1597,32 @@ Produce the structured report now.
         "driveshift_diagnostic_report",
 
       schema:
-        DIAGNOSTIC_REPORT_SCHEMA,
+        experienceVersion === 2 ? compactReportSchema(DIAGNOSTIC_REPORT_SCHEMA) : DIAGNOSTIC_REPORT_SCHEMA,
 
       timeoutMs:
         reportTimeoutMs,
 
       maxOutputTokens:
-        experienceVersion === 2 ? 5200 : REPORT_MAX_OUTPUT_TOKENS,
+        experienceVersion === 2 ? 3200 : REPORT_MAX_OUTPUT_TOKENS,
 
       reasoningEffort:
         process.env
         [experienceVersion === 2 ? 'DRIVESHIFT_V2_REPORT_REASONING' : 'DRIVESHIFT_REPORT_REASONING'] ||
-        (experienceVersion === 2 ? 'medium' : REPORT_REASONING_EFFORT),
+        (experienceVersion === 2 ? 'low' : REPORT_REASONING_EFFORT),
 
       promptCacheKey:
-        "driveshift_report_v6",
+        experienceVersion === 2 ? "driveshift_report_v2_compact_low" : "driveshift_report_v6",
     });
 
   if (!report) {
     return null;
+  }
+
+  if (experienceVersion === 2) {
+    report.technicianHandoff = [
+      ...(report.evidence ?? []).map(item => item.observation).filter(Boolean),
+      report.finalGuidance,
+    ].filter(Boolean).join('\n');
   }
 
   const normalized =
