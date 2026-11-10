@@ -437,6 +437,10 @@ function buildBinaryAnswerEvidence(
   question,
   binary
 ) {
+  // "Yes" to alternatives or compound premises does not affirm every symptom.
+  // Preserve the raw answer and let the paired interview context resolve it.
+  if (/\b(or|and|o|y)\b|[\/,;]/i.test(question)) return [];
+
   const questionSignals =
     extractSignals(
       question

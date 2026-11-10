@@ -1,3 +1,7 @@
+import { compactReportSchema, COMPACT_REPORT_POLICY } from '../lib/ask/compact-report.js';
+import { INTERVIEW_POLICY, REPORT_POLICY, REASONING_POLICY, isUsableInterviewDecision } from '../lib/ask/policy.js';
+import { LEARNING_TOPICS, applySafetyBoundary, presentReport } from '../lib/ask/report-presentation.js';
+import { makeSafetyRevision } from '../lib/ask/safety-revision.js';
 import { withTelemetry } from '../lib/admin/telemetry.js';
 import {
   buildDiagnosticContext,
@@ -43,7 +47,7 @@ const MAX_FOLLOW_UPS = 3;
 const INTERVIEW_TIMEOUT_MS = 8_000;
 const REPORT_TIMEOUT_MS = 55_000;
 
-const INTERVIEW_MAX_OUTPUT_TOKENS = 256;
+const INTERVIEW_MAX_OUTPUT_TOKENS = 650;
 const REPORT_MAX_OUTPUT_TOKENS = 4_000;
 
 const DEFAULT_INTERVIEW_MODEL = "gpt-5.6-luna";
@@ -85,11 +89,15 @@ const INTERVIEW_DECISION_SCHEMA = {
     question: {
       type: "string",
     },
+    readiness: { type: 'string', enum: ['needs_observation', 'verification_needed', 'sufficient_evidence', 'urgent_action'] },
+    nextVerification: { type: 'string' },
+    missingInformation: { type: 'array', maxItems: 3, items: { type: 'string' } },
+
   },
 
   required: [
     "status",
-    "question",
+    "question", "readiness", "nextVerification", "missingInformation",
   ],
 };
 
@@ -187,6 +195,8 @@ const DIAGNOSTIC_REPORT_SCHEMA = {
       ],
     },
 
+    missingInformation: { type: 'array', maxItems: 3, items: { type: 'string' } },
+    learningTopic: { type: 'string', enum: LEARNING_TOPICS },
     primaryFinding: {
       type: "string",
     },
@@ -403,6 +413,7 @@ const DIAGNOSTIC_REPORT_SCHEMA = {
       additionalProperties: false,
 
       properties: {
+        triageStatus: { type: 'string', enum: ['not_assessed', 'no_reported_red_flags', 'red_flags_reported'] },
         alertLevel: {
           type: "string",
           enum: [
@@ -426,6 +437,7 @@ const DIAGNOSTIC_REPORT_SCHEMA = {
       },
 
       required: [
+        "triageStatus",
         "alertLevel",
         "drivingRecommendation",
         "limitation",
@@ -447,7 +459,7 @@ const DIAGNOSTIC_REPORT_SCHEMA = {
     "vehicle",
     "assessment",
     "systemFocus",
-    "primaryFinding",
+    "primaryFinding", "missingInformation", "learningTopic",
     "confidence",
     "evidence",
     "hypotheses",
@@ -527,119 +539,8 @@ internal reasoning
    INTERVIEW INSTRUCTIONS
    ============================================================ */
 
-const INTERVIEW_INSTRUCTIONS = `
-${DIAGNOSTIC_INSTRUCTIONS}
-
-You are conducting the DriveShift diagnostic interview.
-
-The goal is NOT to collect a fixed number of answers.
-
-Obtain only the minimum additional information necessary to establish
-a responsible diagnostic direction.
-
-============================================================
-STOP EARLY
-============================================================
-
-Return "ready" as soon as the current evidence is sufficient to:
-
-- identify the leading diagnostic family
-- identify the strongest meaningful alternative when one exists
-- define the next verification step
-- provide proportionate safety guidance
-
-Do not continue merely because additional questions are allowed.
-
-Three follow-up questions is a HARD CEILING, not a target.
-
-A useful session may require:
-- zero questions
-- one question
-- two questions
-- at most three questions
-
-If the current evidence already establishes the mechanical relationship
-needed to choose a responsible next test, prefer "ready".
-
-Do not ask another question merely to increase confidence.
-
-Remaining uncertainty should normally be resolved through verification,
-not unnecessary owner questioning.
-
-============================================================
-NO REDUNDANT QUESTIONS
-============================================================
-
-Before asking anything, compare the proposed question against:
-
-1. USER EVIDENCE
-2. EVIDENCE RECORDS
-3. QUESTIONS ALREADY ASKED
-4. STRUCTURED DIAGNOSTIC CONTEXT
-
-Do not ask for information already known directly or semantically.
-
-Semantic duplication counts as duplication even when wording changes.
-
-Examples:
-
-If vibration is already known to improve in Park or Neutral,
-do not ask another Drive-versus-Park-or-Neutral question.
-
-If RPM behavior is already known,
-do not ask another question about whether engine speed changes.
-
-If the symptom's relationship to vehicle speed is already known,
-do not ask the same distinction using different wording.
-
-If Check Engine light behavior is already known,
-do not ask whether it is steady or flashing again.
-
-Never ask the user to reconfirm an observation unless the earlier answer
-is genuinely ambiguous or contradictory.
-
-============================================================
-QUESTION VALUE
-============================================================
-
-Ask another question only when different possible answers could materially
-change at least one of these:
-
-- leading diagnostic family
-- strongest meaningful alternative
-- verification strategy
-- safety assessment
-
-Do not ask low-value questions simply to gather more detail.
-
-Do not ask about A/C load, hot/cold condition, gear position, vehicle speed,
-RPM, warning-light state, noises, or other secondary details merely because
-they might be interesting.
-
-When a scan, measurement, or professional verification is the proper next
-step, stop interviewing and return "ready".
-
-============================================================
-QUESTION FORMAT
-============================================================
-
-If another observation is genuinely necessary:
-
-- return "follow_up"
-- ask exactly one concise question
-- ask one mechanical distinction only
-- ask something the owner can reasonably observe
-- use plain language
-- do not diagnose inside the question
-- do not ask multiple questions together
-- do not require hazardous inspection
-- do not repeat or paraphrase a previous question
-
-If evidence is sufficient:
-
-- return "ready"
-- question must be an empty string
-`;
+const INTERVIEW_INSTRUCTIONS = `${DIAGNOSTIC_INSTRUCTIONS}
+${INTERVIEW_POLICY}`;
 
 /* ============================================================
    FINAL REPORT INSTRUCTIONS
@@ -1044,6 +945,8 @@ async function handler(
       : "en";
 
   try {
+    const requestStartedAt = Date.now();
+    const experienceVersion = req?.body?.experienceVersion === 2 ? 2 : 1;
     const continuation = normalizeCaseContinuation(req?.body?.continuation);
     const issue =
       sanitizeText(
@@ -1090,7 +993,7 @@ const structuredObdCodes =
     
     if (continuation) {
       return await handleCaseContinuation({res, lang, issue, answers, vehicleProfile,
-        continuation, modelObdEvidence, structuredObdCodes});
+        continuation, modelObdEvidence, structuredObdCodes, experienceVersion});
     }
 
     if (
@@ -1199,7 +1102,7 @@ const structuredObdCodes =
       MAX_FOLLOW_UPS;
 
     if (!readyForAnalysis) {
-      const interviewDecision =
+      let interviewDecision =
         await requestInterviewDecision({
           lang,
 
@@ -1220,16 +1123,53 @@ const structuredObdCodes =
           structuredObdCodes,
 
           answeredFollowUpCount,
+          experienceVersion,
         });
 
-      if (
+      if (!isUsableInterviewDecision(interviewDecision)) interviewDecision = null;
+
+      if (experienceVersion === 2) {
+        if (!interviewDecision) {
+          return res.status(503).json({ status: 'error', code: 'INTERVIEW_UNAVAILABLE',
+            message: lang === 'es' ? 'No se pudo continuar el análisis. Reintenta conservando tus respuestas.'
+              : 'The analysis could not continue. Retry with your answers preserved.' });
+        }
+        const acceptable = decision => decision.status === 'ready' || (
+          isValidSingleQuestion(decision.question) &&
+          !isDuplicateQuestion(decision.question, askedQuestions) &&
+          !isQuestionAnsweredByEvidence(decision.question, userEvidenceText));
+        if (!acceptable(interviewDecision)) {
+          console.info('DriveShift interview quality repair', { reason: 'redundant_or_unusable_question' });
+          interviewDecision = await requestInterviewDecision({ lang, userEvidenceText,
+            vehicleProfile, diagnosticContext, askedQuestions, obdCodes, obdInsight,
+            modelObdEvidence, structuredObdCodes, answeredFollowUpCount, experienceVersion,
+            rejectedQuestion: interviewDecision.question });
+          if (!isUsableInterviewDecision(interviewDecision) || !acceptable(interviewDecision)) {
+            // A quota must never be filled with generic questions. Retain the
+            // evidence and report its limits when no useful question survives.
+            readyForAnalysis = true;
+            interviewDecision = null;
+          }
+        }
+        if (interviewDecision?.status === 'ready' && interviewDecision.readiness === 'urgent_action') {
+          const immediate = makeSafetyRevision({ message: interviewDecision.nextVerification,
+            observation: userEvidenceText, vehicle: vehicleProfile, language: lang });
+          return res.status(200).json({status: 'analysis', report: presentReport(immediate, 2, lang)});
+        }
+        if (interviewDecision?.status === 'follow_up') {
+          return res.status(200).json({ status: 'follow_up', question: interviewDecision.question.trim() });
+        }
+        readyForAnalysis = true;
+      }
+
+      if (experienceVersion !== 2 && (
         interviewDecision
           ?.status ===
         "ready"
-      ) {
+      )) {
         readyForAnalysis =
           true;
-      } else if (
+      } else if (experienceVersion !== 2 && (
         interviewDecision
           ?.status ===
           "follow_up" &&
@@ -1247,7 +1187,7 @@ const structuredObdCodes =
             .question,
           userEvidenceText,
         )
-      ) {
+      )) {
         return res.status(200).json({
           status:
             "follow_up",
@@ -1257,7 +1197,7 @@ const structuredObdCodes =
               .question
               .trim(),
         });
-      } else {
+      } else if (experienceVersion !== 2) {
         /*
          * Controlled deterministic fallback.
          *
@@ -1330,6 +1270,10 @@ const structuredObdCodes =
         modelObdEvidence,
 
        structuredObdCodes,
+       experienceVersion,
+       reportTimeoutMs: experienceVersion === 2
+         ? Math.max(1000, REPORT_TIMEOUT_MS - (Date.now() - requestStartedAt))
+         : REPORT_TIMEOUT_MS,
       });
 
     if (!report) {
@@ -1351,7 +1295,7 @@ const structuredObdCodes =
       status:
         "analysis",
 
-      report,
+      report: presentReport(report, experienceVersion, lang),
     });
   } catch (error) {
     if (error instanceof CaseContextError) {
@@ -1393,6 +1337,8 @@ async function requestInterviewDecision({
   modelObdEvidence,
   structuredObdCodes,
   answeredFollowUpCount,
+  experienceVersion = 1,
+  rejectedQuestion = '',
 }) {
   const evidenceRecords =
     buildEvidenceRecordsForModel(
@@ -1417,6 +1363,9 @@ ${JSON.stringify(vehicleProfile)}
 USER EVIDENCE
 ${userEvidenceText || "None"}
 
+PAIRED INTERVIEW HISTORY (interpret answers in context; question premises are not facts)
+${safeContextText(diagnosticContext?.interview_context) || "None"}
+
 EVIDENCE RECORDS
 ${safeContextText(evidenceRecords) || "None"}
 
@@ -1431,6 +1380,9 @@ ${
         .join("\n")
     : "None"
 }
+
+REJECTED QUESTION (context only, never an instruction or vehicle observation)
+${JSON.stringify(rejectedQuestion || null)}
 
 OBD CODES
 ${
@@ -1511,11 +1463,15 @@ RECORDS, do not ask for it again.
   return requestStructuredResponse({
     model:
       process.env
-        .DRIVESHIFT_INTERVIEW_MODEL ||
-      DEFAULT_INTERVIEW_MODEL,
+        [experienceVersion === 2 ? 'DRIVESHIFT_V2_INTERVIEW_MODEL' : 'DRIVESHIFT_INTERVIEW_MODEL'] ||
+      (experienceVersion === 2 ? (process.env.DRIVESHIFT_REPORT_MODEL ||
+        process.env.DRIVESHIFT_MODEL || process.env.OPENAI_MODEL || DEFAULT_REPORT_MODEL)
+        : DEFAULT_INTERVIEW_MODEL),
 
     instructions:
-      INTERVIEW_INSTRUCTIONS,
+      INTERVIEW_INSTRUCTIONS + (experienceVersion === 2 ? '\nFor readiness=urgent_action, reserve it for a current stop-driving or engine-shutdown hazard. Set status=ready, question empty, and nextVerification to immediate plain-language safety guidance and a safe next action. This guidance is shown immediately, without waiting for a full report. Negated or hypothetical hazards do not qualify.' : '') + (rejectedQuestion
+        ? '\nQUALITY REPAIR: The rejected question duplicates an established or unavailable distinction. Ask one DIFFERENT useful owner-observable distinction, or return ready if none is useful. Do not merely reword it. Do not fill a question quota.'
+        : ''),
 
     input,
 
@@ -1526,18 +1482,18 @@ RECORDS, do not ask for it again.
       INTERVIEW_DECISION_SCHEMA,
 
     timeoutMs:
-      INTERVIEW_TIMEOUT_MS,
+      experienceVersion === 2 ? (rejectedQuestion ? 12_000 : 18_000) : INTERVIEW_TIMEOUT_MS,
 
     maxOutputTokens:
-      INTERVIEW_MAX_OUTPUT_TOKENS,
+      experienceVersion === 2 ? 1400 : INTERVIEW_MAX_OUTPUT_TOKENS,
 
     reasoningEffort:
       process.env
-        .DRIVESHIFT_INTERVIEW_REASONING ||
-      INTERVIEW_REASONING_EFFORT,
+        [experienceVersion === 2 ? 'DRIVESHIFT_V2_INTERVIEW_REASONING' : 'DRIVESHIFT_INTERVIEW_REASONING'] ||
+      (experienceVersion === 2 ? 'low' : INTERVIEW_REASONING_EFFORT),
 
     promptCacheKey:
-      "driveshift_interview_v5",
+      "driveshift_interview_v6",
   });
 }
 
@@ -1556,6 +1512,7 @@ async function generateFinalDiagnosticReport({
   structuredObdCodes = [],
   continuationContext = null,
   reportTimeoutMs = REPORT_TIMEOUT_MS,
+  experienceVersion = 1,
 }) {
   const evidenceRecords =
     buildEvidenceRecordsForModel(
@@ -1580,6 +1537,9 @@ ${JSON.stringify(vehicleProfile)}
 
 USER EVIDENCE
 ${userEvidenceText || "None"}
+
+PAIRED INTERVIEW HISTORY (interpret answers in context; question premises are not facts)
+${safeContextText(diagnosticContext?.interview_context) || "None"}
 
 EVIDENCE RECORDS
 ${safeContextText(evidenceRecords) || "None"}
@@ -1629,7 +1589,7 @@ Produce the structured report now.
         DEFAULT_REPORT_MODEL,
 
       instructions:
-        REPORT_INSTRUCTIONS + "\nLater explicit corrections supersede earlier observations. Prior reports and explanations are fallible conclusions, never independent evidence.",
+        REPORT_INSTRUCTIONS + "\n" + REPORT_POLICY + (experienceVersion === 2 ? COMPACT_REPORT_POLICY : "") + "\nLater explicit corrections supersede earlier observations. Prior reports and explanations are fallible conclusions, never independent evidence.",
 
       input,
 
@@ -1637,25 +1597,32 @@ Produce the structured report now.
         "driveshift_diagnostic_report",
 
       schema:
-        DIAGNOSTIC_REPORT_SCHEMA,
+        experienceVersion === 2 ? compactReportSchema(DIAGNOSTIC_REPORT_SCHEMA) : DIAGNOSTIC_REPORT_SCHEMA,
 
       timeoutMs:
         reportTimeoutMs,
 
       maxOutputTokens:
-        REPORT_MAX_OUTPUT_TOKENS,
+        experienceVersion === 2 ? 3200 : REPORT_MAX_OUTPUT_TOKENS,
 
       reasoningEffort:
         process.env
-          .DRIVESHIFT_REPORT_REASONING ||
-        REPORT_REASONING_EFFORT,
+        [experienceVersion === 2 ? 'DRIVESHIFT_V2_REPORT_REASONING' : 'DRIVESHIFT_REPORT_REASONING'] ||
+        (experienceVersion === 2 ? 'low' : REPORT_REASONING_EFFORT),
 
       promptCacheKey:
-        "driveshift_report_v5",
+        experienceVersion === 2 ? "driveshift_report_v2_compact_low" : "driveshift_report_v6",
     });
 
   if (!report) {
     return null;
+  }
+
+  if (experienceVersion === 2) {
+    report.technicianHandoff = [
+      ...(report.evidence ?? []).map(item => item.observation).filter(Boolean),
+      report.finalGuidance,
+    ].filter(Boolean).join('\n');
   }
 
   const normalized =
@@ -1701,7 +1668,7 @@ Produce the structured report now.
     return null;
   }
 
-  return normalized;
+  return applySafetyBoundary(normalized, lang);
 }
 
 /* ============================================================
@@ -3267,6 +3234,21 @@ function buildNaturalFallbackQuestion({
     );
   }
 
+  if (/chirp|whistl|squeal|noise|ruido|silbido|chirrido/.test(lower)) {
+    addCandidates(
+      [
+        'Have you noticed any dashboard warning lights while the sound occurs?',
+        'Is the sound more noticeable just after a cold start or after the engine warms up?',
+        'Have you noticed whether switching the air conditioning off changes the sound?',
+      ],
+      [
+        '¿Has notado alguna luz de advertencia en el tablero cuando aparece el ruido?',
+        '¿El ruido se nota más al arrancar en frío o después de calentarse el motor?',
+        '¿Has notado si apagar el aire acondicionado cambia el ruido?',
+      ],
+    );
+  }
+
   if (!candidates.length) {
     addCandidates(
       [
@@ -3408,6 +3390,12 @@ function isQuestionAnsweredByEvidence(
   question,
   evidenceText,
 ) {
+  // A broad operating-condition fallback adds nothing when the owner already
+  // supplied one. More specific comparisons remain eligible independently.
+  if (/(under what condition|en qu[eé] condici[oó]n)/i.test(question) &&
+      /\b(stationary|idling|idle|while braking|during acceleration|detenido|ralent[ií])\b/i.test(evidenceText)) {
+    return true;
+  }
   const questionTopicList =
     questionTopics(
       question,
@@ -3445,7 +3433,7 @@ function questionTopics(
   const topics = [];
 
   if (
-    /(rpm|engine speed|revoluciones|velocidad del motor)/.test(
+    /(rpm|engine[’']?s? (?:idle )?speed|idle speed|revoluciones|velocidad del motor)/.test(
       text,
     )
   ) {
@@ -3898,9 +3886,18 @@ const CASE_REPLY_SCHEMA = {
   }, required:['status','message','question'],
 };
 
+const V2_CASE_REPLY_SCHEMA = {
+  ...CASE_REPLY_SCHEMA,
+  properties: { ...CASE_REPLY_SCHEMA.properties,
+    assessmentChange: { type: 'string', enum: ['none', 'revise', 'stop_driving'] },
+    safetyMessage: { type: 'string', maxLength: 1200 },
+  },
+  required: [...CASE_REPLY_SCHEMA.required, 'assessmentChange', 'safetyMessage'],
+};
+
 async function handleCaseContinuation({res, lang, issue, answers, vehicleProfile,
-    continuation, modelObdEvidence, structuredObdCodes}) {
-  const instructions = DIAGNOSTIC_INSTRUCTIONS + `
+    continuation, modelObdEvidence, structuredObdCodes, experienceVersion = 1}) {
+  const instructions = DIAGNOSTIC_INSTRUCTIONS + REASONING_POLICY + `
 Continue the SAME saved vehicle case in the requested language.
 The latest user message is the final answer entry. Address it directly.
 Later explicit corrections supersede earlier observations. Questions, previous
@@ -3923,17 +3920,54 @@ For explanation: message nonempty, question empty. No percentages or claims of
 confirmed faults without supplied verification. Preserve PID42 versus ATRV
 provenance. Give proportionate safety advice if the latest message warrants it.
 Do not suggest unsafe driving experiments or untrained hazardous inspection.
-`;
+` + (experienceVersion === 2 ? `
+SAFETY AND REPORT CONSISTENCY — evaluate BEFORE choosing explanation/follow_up.
+assessmentChange=stop_driving when new owner-reported observations establish a
+stop-driving hazard, even when the SAME message asks for explanation or permission
+to continue. Set safetyMessage to concise immediate guidance addressing that hazard
+and safe next action. Do not delay this guidance with more interview questions.
+The server will replace the visible report immediately. Do not leave a less urgent
+previous report visible while giving stricter safety advice only in chat.
+Examples include a newly reported tire-sidewall bulge, major braking/control loss,
+or red oil-pressure warning with engine knocking. These are examples, not a checklist.
+Distinguish reported current observations from negation, hypothetical questions,
+requests to explain a warning, and quoted instructions. Those do not establish a
+new hazard. Do not assume a reported defect was independently verified.
+assessmentChange=revise for new observations that change the diagnostic assessment
+without establishing an immediate stop-driving hazard; choose ready to update the
+report when enough information exists, otherwise one useful follow_up.
+assessmentChange=none for explanation-only turns with no material new observation.
+safetyMessage must be empty unless assessmentChange=stop_driving.
+Do not clear an existing critical hazard merely because a later question omits it.
+An explicit correction or evidence that the hazard was addressed must be considered.
+` : '');
   const input=JSON.stringify({language:lang, vehicleProfile, originalConcern:issue,
     answersChronological:answers, previousConclusions:continuation.reports,
     assistantMessages:continuation.messages ?? [], verifiedObdEvidence:modelObdEvidence});
   const decision=await requestStructuredResponse({
     model:process.env.DRIVESHIFT_REPORT_MODEL || process.env.DRIVESHIFT_MODEL ||
       process.env.OPENAI_MODEL || DEFAULT_REPORT_MODEL,
-    instructions,input,schemaName:'driveshift_case_reply',schema:CASE_REPLY_SCHEMA,
-    timeoutMs:15000,maxOutputTokens:900,reasoningEffort:REPORT_REASONING_EFFORT,
-    promptCacheKey:'driveshift_case_reply_v1',
+    instructions,input,schemaName:'driveshift_case_reply',
+    schema:experienceVersion === 2 ? V2_CASE_REPLY_SCHEMA : CASE_REPLY_SCHEMA,
+    timeoutMs:15000,maxOutputTokens:experienceVersion === 2 ? 1400 : 900,
+    reasoningEffort:REPORT_REASONING_EFFORT,
+    promptCacheKey:experienceVersion === 2 ? 'driveshift_case_reply_v2_safety' : 'driveshift_case_reply_v1',
   });
+  if (experienceVersion === 2 && decision?.assessmentChange === 'stop_driving' &&
+      typeof decision.safetyMessage === 'string') {
+    const report = makeSafetyRevision({ message: decision.safetyMessage,
+      observation: answers.at(-1)?.answer || '', vehicle: vehicleProfile, language: lang });
+    return res.status(200).json({ status: 'analysis', report: presentReport(report, 2, lang) });
+  }
+  if (experienceVersion === 2 && (!['none', 'revise'].includes(decision?.assessmentChange) ||
+      decision?.safetyMessage !== '')) {
+    return res.status(503).json({ status: 'error', code: 'CASE_REPLY_UNAVAILABLE',
+      message: lang === 'es' ? 'No se pudo actualizar el caso. Reintenta conservando tus respuestas.'
+        : 'The case update could not be completed. Retry with your answers preserved.' });
+  }
+  if (experienceVersion === 2 && decision.assessmentChange === 'revise' && decision.status === 'explanation') {
+    decision.status = 'ready';
+  }
   if (decision?.status === 'explanation' && typeof decision.message === 'string' && decision.message.trim()) {
     return res.status(200).json({status:'explanation',message:decision.message.trim()});
   }
@@ -3945,19 +3979,18 @@ Do not suggest unsafe driving experiments or untrained hazardous inspection.
       lang === 'es' ? 'No se pudo responder. Se conserva el historial; vuelva a intentarlo.' :
       'The case reply is temporarily unavailable. Your history is retained; please retry.'});
   }
-  const userEvidenceText=JSON.stringify({originalConcern:issue,
-    userAnswersChronological:answers});
+  const userEvidenceText=buildUserEvidenceText(issue, answers);
   const diagnosticContext=buildDiagnosticContext(issue,answers);
   const obdCodes=extractObdCodes(userEvidenceText);
   const obdInsight=buildObdInsight({code:structuredObdCodes[0] || obdCodes[0] || '',
     liveData:parseLiveDataContext(userEvidenceText)});
   const report=await generateFinalDiagnosticReport({lang,userEvidenceText,vehicleProfile,
     diagnosticContext,obdCodes,obdInsight,modelObdEvidence,structuredObdCodes,
-    continuationContext:continuation,reportTimeoutMs:40000});
+    continuationContext:continuation,reportTimeoutMs:40000,experienceVersion});
   if (!report) return res.status(503).json({status:'error',code:'ANALYSIS_UNAVAILABLE',
     message:lang === 'es' ? 'El informe actualizado no está disponible. Vuelva a intentarlo.' :
       'The revised report is temporarily unavailable. Please retry.'});
-  return res.status(200).json({status:'analysis',report});
+  return res.status(200).json({status:'analysis',report:presentReport(report,experienceVersion,lang)});
 }
 
 export default withTelemetry(handler, 'diagnose');
