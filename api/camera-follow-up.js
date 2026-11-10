@@ -2,6 +2,14 @@ import {normalizeVehicleHistory, VEHICLE_HISTORY_INSTRUCTIONS} from '../lib/memo
 import {withTelemetry} from '../lib/admin/telemetry.js';
 import {followupContext, followupHistory, outputText} from '../lib/camera/followup.js';
 
+const usageLimitCodes = new Set([
+  'insufficient_quota',
+  'credit_balance_exhausted',
+  'organization_spend_limit_exceeded',
+  'project_spend_limit_exceeded',
+  'organization_usage_limit_exceeded',
+]);
+
 async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store');
   const fail = (status, code, message) => res.status(status).json({ok:false,error:{code,message}});
@@ -33,6 +41,15 @@ async function handler(req, res) {
           {role:'user',content:[{type:'input_text',text:JSON.stringify({inspection:context,vehicleMemory,history:followupHistory(b.history),question})}]}],
       }),
     });
+    if (upstream.status === 429) {
+      const details = await upstream.json().catch(() => null);
+      if (usageLimitCodes.has(details?.error?.code) || usageLimitCodes.has(details?.error?.type)) {
+        return fail(503,'CAMERA_FOLLOWUP_QUOTA','Photo follow-up is temporarily unavailable.');
+      }
+      const retryAfter = upstream.headers.get('retry-after');
+      if (retryAfter && /^\d{1,6}$/.test(retryAfter)) res.setHeader('Retry-After',retryAfter);
+      return fail(429,'CAMERA_FOLLOWUP_BUSY','Photo follow-up is busy. Try again shortly.');
+    }
     if (!upstream.ok) return fail(502,'CAMERA_FOLLOWUP_UPSTREAM','The explanation service could not respond. Try again.');
     const data = await upstream.json();
     if (data.status === 'incomplete') return fail(502,'CAMERA_FOLLOWUP_INCOMPLETE','The explanation was incomplete. Try again.');

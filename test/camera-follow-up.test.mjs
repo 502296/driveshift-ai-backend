@@ -14,3 +14,37 @@ const saved=globalThis.fetch,key=process.env.OPENAI_API_KEY;process.env.OPENAI_A
 try{for(const incomplete of [false,true]){globalThis.fetch=async(_,o)=>{payload=JSON.parse(o.body);return Response.json({status:incomplete?'incomplete':'completed',output:[{type:'message',content:[{type:'output_text',text:'Trace the residue.'}]}]});};const r=response();await handler({method:'POST',body:{inspection,question:'Next?',language:'es'}},r);assert.equal(r.statusCode,incomplete?502:200);assert.equal(payload.store,false);assert.match(payload.input[0].content[0].text,/Spanish/);assert.match(payload.input[0].content[0].text,/Never certify/);assert.ok(payload.input.every(m=>m.content.every(c=>c.type==='input_text')));}}
 finally{globalThis.fetch=saved;if(key===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=key;}});
 test('extracts only message text',()=>{assert.equal(outputText({output:[{type:'reasoning',content:[{type:'output_text',text:'hidden'}]}]}),'');});
+
+test('distinguishes retryable rate limits from usage limits', async (t) => {
+  const savedFetch = globalThis.fetch;
+  const savedKey = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = 'test';
+  t.after(() => {
+    globalThis.fetch = savedFetch;
+    if (savedKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = savedKey;
+  });
+
+  const cases = [
+    [{code:'rate_limit_exceeded'}, 429, 'CAMERA_FOLLOWUP_BUSY', '2'],
+    [{type:'insufficient_quota'}, 503, 'CAMERA_FOLLOWUP_QUOTA', undefined],
+    [{code:'credit_balance_exhausted'}, 503, 'CAMERA_FOLLOWUP_QUOTA', undefined],
+  ];
+  for (const [error, statusCode, code, retryAfter] of cases) {
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls++;
+      return Response.json({error:{...error,message:'private account detail'}}, {
+        status:429, headers:{'Retry-After':'2'},
+      });
+    };
+    const headers = {};
+    const res = {...response(), setHeader(name, value) { headers[name] = value; }};
+    await handler({method:'POST',body:{inspection,question:'Next?'}},res);
+    assert.equal(calls,1);
+    assert.equal(res.statusCode,statusCode);
+    assert.equal(res.payload.error.code,code);
+    assert.equal(headers['Retry-After'],retryAfter);
+    assert.doesNotMatch(JSON.stringify(res.payload),/private account detail/);
+  }
+});
