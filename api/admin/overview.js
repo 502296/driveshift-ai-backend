@@ -15,6 +15,7 @@ export function summarize(events) {
 export function summarizeAppEvents(events) {
   const steps = new Map();
   const countries = new Map();
+  const regions = new Map();
   for (const event of events) {
     const key = [event.feature, event.stage, event.version].join('/');
     const row = steps.get(key) ?? {
@@ -25,11 +26,16 @@ export function summarizeAppEvents(events) {
     steps.set(key, row);
     if (event.feature === 'app' && event.event === 'open' && event.country) {
       countries.set(event.country, (countries.get(event.country) ?? 0) + 1);
+      if (event.region) {
+        const region = `${event.country}-${event.region}`;
+        regions.set(region, (regions.get(region) ?? 0) + 1);
+      }
     }
   }
   return {
     steps: [...steps.values()].sort((a, b) => b.open - a.open || b.start - a.start),
     countries: Object.fromEntries([...countries].sort((a, b) => b[1] - a[1])),
+    regions: Object.fromEntries([...regions].sort((a, b) => b[1] - a[1])),
   };
 }
 
@@ -45,7 +51,7 @@ export default async function handler(req, res) {
     const enabled = process.env.DRIVESHIFT_APP_ANALYTICS_ENABLED === 'true';
     let appAnalytics = { enabled };
     if (enabled) {
-      const appRows = await request(`/rest/v1/driveshift_app_events?created_at=gte.${encodeURIComponent(since)}&select=feature,event,stage,version,country&order=created_at.desc,id.desc&limit=1000`).catch(() => null);
+      const appRows = await request(`/rest/v1/driveshift_app_events?created_at=gte.${encodeURIComponent(since)}&select=feature,event,stage,version,country,region&order=created_at.desc,id.desc&limit=1000`).catch(() => null);
       appAnalytics = appRows === null
         ? { enabled, unavailable: true }
         : { enabled, sampled: appRows.length === 1000, ...summarizeAppEvents(appRows) };
