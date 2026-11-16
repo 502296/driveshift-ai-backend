@@ -31,6 +31,26 @@ async function overview() {
       for (const value of [row.endpoint,row.requests,row.errors,(row.averageMs/1000).toFixed(1)+' s']) { const td=document.createElement('td');td.textContent=value;tr.append(td); }
       $('endpoints').append(tr);
     }
+    const usage = data.appAnalytics;
+    $('app-usage').replaceChildren();
+    for (const row of usage?.steps ?? []) {
+      const tr = document.createElement('tr');
+      for (const value of [row.feature, row.stage, row.version, row.open, row.start, row.complete, row.failed]) {
+        const cell = document.createElement('td');
+        cell.textContent = value;
+        tr.append(cell);
+      }
+      $('app-usage').append(tr);
+    }
+    $('app-usage-status').textContent = !usage?.enabled
+      ? 'App usage collection is disabled.'
+      : usage.unavailable ? 'App usage data is unavailable.'
+      : usage.sampled ? 'Showing up to 1,000 events from the last 24 hours.'
+      : 'Events from the last 24 hours. Counts reflect participating app installations.';
+    const countries = Object.entries(usage?.countries ?? {});
+    $('app-countries').textContent = countries.length
+      ? 'App opens by country · ' + countries.map(([country, count]) => country + ' ' + count).join(' · ')
+      : '';
     message(data.telemetryEnabled ? (data.requests ? '' : 'No requests have been recorded yet. Run a diagnosis to verify telemetry.') : 'Telemetry is disabled. Set DRIVESHIFT_TELEMETRY_ENABLED=true on Vercel and redeploy to start recording.');
   } catch(e) { message(e.message); }
   finally { $('refresh').disabled=false; }
