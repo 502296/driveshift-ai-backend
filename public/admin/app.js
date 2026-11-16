@@ -51,6 +51,13 @@ async function overview() {
     $('app-countries').textContent = countries.length
       ? 'App opens by country · ' + countries.map(([country, count]) => country + ' ' + count).join(' · ')
       : '';
+    const regions = Object.entries(usage?.regions ?? {});
+    if (regions.length) {
+      $('app-countries').append(
+        document.createElement('br'),
+        'App opens by region · ' + regions.map(([region, count]) => region + ' ' + count).join(' · '),
+      );
+    }
     message(data.telemetryEnabled ? (data.requests ? '' : 'No requests have been recorded yet. Run a diagnosis to verify telemetry.') : 'Telemetry is disabled. Set DRIVESHIFT_TELEMETRY_ENABLED=true on Vercel and redeploy to start recording.');
   } catch(e) { message(e.message); }
   finally { $('refresh').disabled=false; }
