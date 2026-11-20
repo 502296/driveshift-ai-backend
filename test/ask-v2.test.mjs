@@ -1,0 +1,353 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import handler from '../api/diagnose.js';
+import learningHandler from '../api/learning.js';
+import { buildUserEvidenceText, buildDiagnosticContext } from '../api/helpers/diagnostic-core.js';
+import { applySafetyBoundary, presentReport } from '../lib/ask/report-presentation.js';
+import { isUsableInterviewDecision } from '../lib/ask/policy.js';
+import { createLearningService } from '../lib/ask/learning.js';
+
+const reportFixture = () => ({
+  schemaVersion: '1.0', vehicle: {}, assessment: 'INSPECTION_RECOMMENDED',
+  systemFocus: { id: 'engine_performance', label: 'Accessory drive', schematicKey: 'engine_performance_v1', affectedNodes: ['Accessory belt'] },
+  primaryFinding: 'The source of the reported chirp has not been isolated.', confidence: 'HIGH',
+  evidence: [{ id: 'E01', source: 'user_observation', status: 'OBSERVED', observation: 'Chirp with the engine running while stationary.', diagnosticMeaning: 'Vehicle movement is not necessary.', strength: 'HIGH' }],
+  hypotheses: [{ id: 'H01', title: 'Accessory belt tracking or contact noise', likelihood: 'HIGH', supportingEvidenceIds: ['E01'], contradictingEvidenceIds: [], whyItFits: 'An engine-driven source remains possible.', confirmationTest: 'A technician checks belt alignment; incorrect tracking supports this mechanism.' }],
+  whyAlternativesRankLower: '', verificationPath: [{ step: 1, action: 'Have a technician localize the noise.', purpose: 'Distinguish belt contact from pulley bearing noise.', requiredTool: '' }],
+  doNotReplaceYet: [{ component: 'Accessory belt', reason: 'Failure has not been verified.' }], vehicleSpecificNote: '',
+  safety: { alertLevel: 'NORMAL', triageStatus: 'not_assessed', drivingRecommendation: 'Short local driving is reasonable.', limitation: 'Source not isolated.', stopCondition: 'A temperature or charging warning appears.' },
+  technicianHandoff: 'Localize the stationary engine chirp before replacing parts.', finalGuidance: 'Arrange a targeted inspection.',
+  missingInformation: ['Cold versus warm behavior', 'Relevant warning lights'], learningTopic: 'belt_noise',
+});
+
+const response = () => ({ statusCode: 200, headers: {}, body: null,
+  setHeader(k, v) { this.headers[k] = v; },
+  status(code) { this.statusCode = code; return this; },
+  json(value) { this.body = value; return value; },
+});
+
+async function runCase(body, replies, inspect = () => {}) {
+  const saved = { fetch: globalThis.fetch, key: process.env.OPENAI_API_KEY, flag: process.env.DRIVESHIFT_TELEMETRY_ENABLED };
+  process.env.OPENAI_API_KEY = 'test-only';
+  process.env.DRIVESHIFT_TELEMETRY_ENABLED = 'false';
+  let call = 0;
+  globalThis.fetch = async (url, options) => {
+    assert.equal(url, 'https://api.openai.com/v1/responses');
+    const request = JSON.parse(options.body);
+    inspect(request, call);
+    assert.ok(call < replies.length, 'Unexpected extra model call');
+    const next = replies[call++];
+    return Response.json({ status: 'completed', output_text: JSON.stringify(next) });
+  };
+  try {
+    const res = response();
+    await handler({ method: 'POST', headers: {}, body }, res);
+    assert.equal(call, replies.length);
+    return res;
+  } finally {
+    globalThis.fetch = saved.fetch;
+    for (const [key, value] of [['OPENAI_API_KEY', saved.key], ['DRIVESHIFT_TELEMETRY_ENABLED', saved.flag]]) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+}
+
+test('ambiguous yes to a compound question does not invent both observations', () => {
+  const text = buildUserEvidenceText('There is an unusual noise.', [{ question: 'Is there overheating or coolant loss?', answer: 'Yes' }]);
+  assert.equal(text, 'There is an unusual noise.\nYes');
+  assert.ok(!text.includes('overheating'));
+});
+
+test('a single unambiguous negative remains negative evidence', () => {
+  assert.match(buildUserEvidenceText('It is noisy.', [{ question: 'Is it overheating?', answer: 'No' }]), /no overheating/);
+});
+
+test('questions remain paired for model reasoning but never enter raw mechanical evidence', () => {
+  const context = buildDiagnosticContext('Engine noise.', [{ question: 'Does P0300 appear on the scanner?', answer: 'No' }]);
+  assert.match(context.interview_context, /P0300/);
+  assert.ok(!context.user_evidence_text.includes('P0300'));
+});
+
+test('ready decision needs an explicit next verification and a coherent readiness state', () => {
+  assert.equal(isUsableInterviewDecision({ status: 'ready', question: '' }), false);
+  assert.equal(isUsableInterviewDecision({ status: 'ready', question: '', readiness: 'needs_observation', nextVerification: 'Inspect it professionally.', missingInformation: [] }), false);
+  assert.equal(isUsableInterviewDecision({ status: 'ready', question: '', readiness: 'verification_needed', nextVerification: 'Retrieve stored trouble codes.', missingInformation: [] }), true);
+});
+
+test('unknown driving suitability cannot appear as normal or a driving clearance', () => {
+  const report = reportFixture();
+  report.assessment = 'NORMAL_MONITORING';
+  applySafetyBoundary(report);
+  assert.equal(report.safety.alertLevel, 'CAUTION');
+  assert.equal(report.assessment, 'INSPECTION_RECOMMENDED');
+  assert.match(report.safety.drivingRecommendation, /has not been established/);
+});
+
+test('safety boundary never downgrades an existing critical action', () => {
+  const report = reportFixture();
+  report.safety.alertLevel = 'CRITICAL';
+  report.safety.drivingRecommendation = 'Stop safely and arrange assistance.';
+  assert.equal(applySafetyBoundary(report).safety.drivingRecommendation, 'Stop safely and arrange assistance.');
+});
+
+test('v2 removes all categorical confidence without mutating the v1 report', () => {
+  const original = reportFixture();
+  const v2 = presentReport(original, 2, 'es');
+  assert.equal(v2.schemaVersion, '2.0');
+  assert.equal(v2.confidence, undefined);
+  assert.equal(v2.hypotheses[0].likelihood, undefined);
+  assert.equal(v2.evidence[0].strength, undefined);
+  assert.match(v2.learning.endpoint, /language=es/);
+  assert.equal(original.confidence, 'HIGH');
+  const legacy = presentReport(original, 1);
+  assert.equal(legacy.schemaVersion, '1.0');
+  assert.equal(legacy.hypotheses[0].likelihood, 'HIGH');
+  assert.equal(legacy.learning, undefined);
+  assert.equal(legacy.safety.triageStatus, undefined);
+});
+
+test('short answer remains in its question context through the HTTP interview', async () => {
+  const decision = { status: 'follow_up', question: 'Does the sound continue after the engine warms up?', readiness: 'needs_observation', missingInformation: ['Temperature relationship'], nextVerification: '' };
+  const res = await runCase({ issue: 'A bird-like chirp from the engine.', answers: [{ question: 'Stationary or moving?', answer: 'Stationary' }] }, [decision], request => {
+    assert.match(request.input, /Stationary or moving/);
+    assert.match(request.instructions, /Do not stop just because a broad system/);
+  });
+  assert.equal(res.body.status, 'follow_up');
+  assert.equal(res.body.question, decision.question);
+});
+
+test('three answers produce limited v2 report, not a forced certainty or another question', async () => {
+  const res = await runCase({ experienceVersion: 2, issue: 'Engine chirp.', answers: [
+    { question: 'Stationary or moving?', answer: 'Stationary' },
+    { question: 'Cold or warm?', answer: 'I do not know' },
+    { question: 'Any warning?', answer: 'I do not know' },
+  ] }, [reportFixture()], request => {
+    assert.equal(request.text.format.name, 'driveshift_diagnostic_report');
+    assert.match(request.instructions, /Unknown suitability/);
+    assert.match(request.input, /I do not know/);
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.status, 'analysis');
+  assert.equal(res.body.report.schemaVersion, '2.0');
+  assert.equal(res.body.report.safety.alertLevel, 'CAUTION');
+  assert.equal(res.body.report.hypotheses[0].likelihood, undefined);
+});
+
+test('legacy request still receives v1 enum fields', async () => {
+  const ready = { status: 'ready', question: '', readiness: 'verification_needed', nextVerification: 'Arrange a targeted professional inspection.', missingInformation: [] };
+  const res = await runCase({ issue: 'A chirp at idle with warm engine.' }, [ready, reportFixture()]);
+  assert.equal(res.body.report.schemaVersion, '1.0');
+  assert.ok(res.body.report.hypotheses[0].likelihood);
+  assert.equal(res.body.report.missingInformation, undefined);
+});
+
+test('saved-case regeneration cannot extract a DTC from an unanswered question premise', async () => {
+  const res = await runCase({ experienceVersion: 2, issue: 'Noise at idle.', answers: [
+    { question: 'Have you measured code P0300?', answer: 'No' },
+    { question: '', answer: 'Update the report.' },
+  ], continuation: { sessionId: 'fixture', reports: [reportFixture()], messages: [] } }, [
+    { status: 'ready', message: '', question: '', assessmentChange: 'revise', safetyMessage: '' }, reportFixture(),
+  ], (request, index) => {
+    if (index === 1) {
+      assert.match(request.input, /OBD CODES\nNone/);
+      assert.match(request.input, /PAIRED INTERVIEW HISTORY/);
+    }
+  });
+  assert.equal(res.body.report.schemaVersion, '2.0');
+});
+
+test('unresolved saved-case observation can ask a follow-up after the initial ceiling', async () => {
+  const res = await runCase({ issue: 'Engine noise.', answers: Array.from({ length: 4 }, (_, i) => ({ question: `Prior observation ${i}?`, answer: 'Unknown' })), continuation: { sessionId: 'fixture', reports: [reportFixture()], messages: [] } }, [
+    { status: 'follow_up', message: '', question: 'Did the new noise begin immediately after the recent repair?' },
+  ]);
+  assert.equal(res.body.status, 'follow_up');
+});
+
+test('learning verifies a curated link, caches it, and never returns external HTML', async () => {
+  let calls = 0;
+  const get = createLearningService({ fetchImpl: async url => {
+    calls++;
+    assert.equal(new URL(url).hostname, 'www.youtube.com');
+    return Response.json({ provider_name: 'YouTube', type: 'video', title: 'Codes', html: '<script>bad</script>' });
+  } });
+  const items = await get('obd_codes');
+  assert.equal(items[0].url, 'https://www.youtube.com/watch?v=_qJymlwHcaU');
+  assert.equal(items[0].html, undefined);
+  items[0].url = 'tampered';
+  assert.match((await get('obd_codes'))[0].url, /^https:\/\/www.youtube.com\/watch/);
+  assert.equal(calls, 1);
+});
+
+test('removed videos and unsupported topics/languages are hidden without a model-generated fallback', async () => {
+  let calls = 0;
+  const get = createLearningService({ fetchImpl: async () => { calls++; return new Response('', { status: 404 }); } });
+  assert.deepEqual(await get('obd_codes'), []);
+  assert.deepEqual(await get('belt_noise'), []);
+  assert.deepEqual(await get('obd_codes', 'es'), []);
+  assert.deepEqual(await get('https://evil.example'), []);
+  assert.equal(calls, 3);
+});
+
+test('learning failure is isolated and concurrent reads share one availability request', async () => {
+  let calls = 0;
+  const get = createLearningService({ fetchImpl: async () => { calls++; throw new Error('offline'); } });
+  assert.deepEqual(await Promise.all([get('live_data'), get('live_data')]), [[], []]);
+  assert.equal(calls, 1);
+});
+
+test('learning endpoint rejects arbitrary queries and writes', async () => {
+  const a = response();
+  await learningHandler({ method: 'GET', query: { topic: 'http://localhost' } }, a);
+  assert.equal(a.statusCode, 400);
+  const b = response();
+  await learningHandler({ method: 'POST', query: {} }, b);
+  assert.equal(b.statusCode, 405);
+});
+
+test('publisher availability checks only fixed video paths and requires a video MIME type', async () => {
+  const calls = [];
+  const get = createLearningService({ fetchImpl: async (url, options) => {
+    calls.push({ url, method: options.method });
+    assert.equal(new URL(url).host, 'go.gates.com');
+    assert.equal(options.method, 'HEAD');
+    assert.equal(options.redirect, 'error');
+    return new Response('', { headers: { 'content-type': 'video/mp4' } });
+  } });
+  const items = await get('cooling', 'es');
+  assert.equal(items.length, 1);
+  assert.equal(items[0].platform, 'publisher');
+  assert.equal(items[0].language, 'es');
+  assert.match(items[0].url, /Cooling.*ES%20V01\.mp4$/);
+  assert.equal(calls.length, 1);
+  const notVideo = createLearningService({ fetchImpl: async () => new Response('<html>blocked</html>', {
+    headers: { 'content-type': 'text/html' },
+  }) });
+  assert.deepEqual(await notVideo('cooling', 'en'), []);
+});
+
+test('critical reports prioritize the safety action and omit optional videos', () => {
+  const report = reportFixture();
+  report.assessment = 'STOP_DRIVING';
+  report.safety.alertLevel = 'CRITICAL';
+  assert.equal(presentReport(report, 2).learning.topic, 'none');
+});
+
+test('unknown RPM response is not re-asked as an idle-speed rhythm', async () => {
+  const res = await runCase({ experienceVersion: 2,
+    issue: 'Intermittent chirp while stationary with the engine idling.',
+    answers: [{ question: 'Does it change when you raise engine speed?',
+      answer: 'I have not checked whether it changes with engine speed.' }],
+  }, [{ status: 'follow_up',
+    question: 'Does the chirp recur in a pattern tied to the engine’s idle speed?',
+    readiness: 'needs_observation', missingInformation: ['Rhythm'], nextVerification: '',
+  }, { status: 'follow_up', question: 'Have any dashboard warning lights appeared with this sound?',
+    readiness: 'needs_observation', missingInformation: ['Warnings'], nextVerification: '',
+  }], (request, call) => {
+    assert.equal(request.reasoning.effort, 'low');
+    if (call === 1) assert.match(request.instructions, /QUALITY REPAIR/);
+  });
+  assert.equal(res.body.status, 'follow_up');
+  assert.equal(res.body.question, 'Have any dashboard warning lights appeared with this sound?');
+});
+
+test('known stationary idling does not trigger the generic operating-condition fallback', async () => {
+  const res = await runCase({ experienceVersion: 2,
+    issue: 'An intermittent whistle while stationary with the engine idling.',
+    answers: [{ question: 'Does the chirp change with engine speed?', answer: 'I do not know' }],
+  }, [{ status: 'follow_up',
+    question: 'Under what condition does the symptom happen most clearly?',
+    readiness: 'needs_observation', missingInformation: ['Conditions'], nextVerification: '',
+  }, { status: 'follow_up', question: 'Have any dashboard warning lights appeared with this sound?',
+    readiness: 'needs_observation', missingInformation: ['Warnings'], nextVerification: '',
+  }]);
+  assert.equal(res.body.status, 'follow_up');
+  assert.match(res.body.question, /dashboard warning lights/);
+});
+
+test('v2 provider failure cannot masquerade as a generic fallback interview', async () => {
+  const res = await runCase({ experienceVersion: 2, issue: 'There is an intermittent noise.', answers: [] }, [null]);
+  assert.equal(res.statusCode, 503);
+  assert.equal(res.body.code, 'INTERVIEW_UNAVAILABLE');
+  assert.equal(res.body.question, undefined);
+});
+
+test('new stop-driving observation replaces the visible report even in an explanation turn', async () => {
+  const res = await runCase({ experienceVersion: 2, issue: 'Steering-wheel vibration after a pothole.',
+    answers: [{ question: '', answer: 'I now see a bulge on the front tire sidewall. Can I drive 40 miles slowly?' }],
+    continuation: { sessionId: 'fixture', reports: [reportFixture()], messages: [] },
+  }, [{ status: 'explanation', message: 'Do not drive on that tire.', question: '',
+    assessmentChange: 'stop_driving', safetyMessage: 'Do not drive on that tire. Arrange roadside assistance or towing.' }], request => {
+    assert.ok(request.text.format.schema.required.includes('assessmentChange'));
+    assert.match(request.instructions, /SAME message asks for explanation/);
+  });
+  assert.equal(res.body.status, 'analysis');
+  assert.equal(res.body.report.assessment, 'STOP_DRIVING');
+  assert.equal(res.body.report.safety.alertLevel, 'CRITICAL');
+  assert.match(res.body.report.primaryFinding, /Do not drive/);
+  assert.match(res.body.report.evidence[0].observation, /bulge/);
+  assert.deepEqual(res.body.report.hypotheses, []);
+  assert.equal(res.body.report.learning.topic, 'none');
+});
+
+test('explanation without a new hazard stays an explanation and does not invent a revision', async () => {
+  const res = await runCase({ experienceVersion: 2, issue: 'Noise.',
+    answers: [{ question: '', answer: 'Why does the report say to stop if a tire has a bulge? Mine does not.' }],
+    continuation: { sessionId: 'fixture', reports: [reportFixture()], messages: [] },
+  }, [{ status: 'explanation', message: 'That is a conditional warning, not an observed tire defect.',
+    question: '', assessmentChange: 'none', safetyMessage: '' }]);
+  assert.equal(res.body.status, 'explanation');
+  assert.equal(res.body.report, undefined);
+});
+
+test('material assessment change cannot remain hidden in explanation text', async () => {
+  const res = await runCase({ experienceVersion: 2, issue: 'Noise.',
+    answers: [{ question: '', answer: 'The technician found the belt alignment is wrong. Update this.' }],
+    continuation: { sessionId: 'fixture', reports: [reportFixture()], messages: [] },
+  }, [{ status: 'explanation', message: 'This changes the diagnostic direction.', question: '',
+    assessmentChange: 'revise', safetyMessage: '' }, reportFixture()]);
+  assert.equal(res.body.status, 'analysis');
+});
+
+test('v2 report uses a reasoning budget and bounded repair instead of a question quota', async () => {
+  const duplicate = { status: 'follow_up', question: 'Does the sound change with engine speed?',
+    readiness: 'needs_observation', missingInformation: ['RPM'], nextVerification: '' };
+  const res = await runCase({ experienceVersion: 2, issue: 'Noise while idling.',
+    answers: [{ question: duplicate.question, answer: 'I do not know' }],
+  }, [duplicate, duplicate, reportFixture()], (request, call) => {
+    if (call === 2) assert.equal(request.reasoning.effort, 'low');
+  });
+  assert.equal(res.body.status, 'analysis');
+  assert.equal(res.body.report.safety.alertLevel, 'CAUTION');
+});
+
+
+test('initial V2 critical action returns after one model call', async () => {
+  const decision = {status:'ready', question:'', readiness:'urgent_action',
+    nextVerification:'Stop safely, turn the engine off and arrange towing. Do not open the hot cooling system.', missingInformation:[]};
+  const res = await runCase({experienceVersion:2, issue:'Red temperature warning and steam now.'}, [decision]);
+  assert.equal(res.body.report.assessment, 'STOP_DRIVING');
+  assert.equal(res.body.report.safety.alertLevel, 'CRITICAL');
+  assert.match(res.body.report.primaryFinding, /turn the engine off/);
+  assert.equal(res.body.report.learning.topic, 'none');
+});
+
+test('compact V2 generation omits discarded fields but restores identity and handoff', async () => {
+  const compact = reportFixture();
+  for (const key of ['vehicle','schemaVersion','confidence','technicianHandoff','whyAlternativesRankLower']) delete compact[key];
+  for (const item of compact.evidence) delete item.strength;
+  for (const item of compact.hypotheses) delete item.likelihood;
+  const res = await runCase({experienceVersion:2, issue:'Engine chirp.', vehicleProfile:{make:'Toyota',model:'Camry'},
+    answers:[{question:'Where?',answer:'Engine bay'},{question:'When?',answer:'At idle'},{question:'Temperature?',answer:'Unknown'}]},
+    [compact], request => {
+      const schema = request.text.format.schema;
+      assert.equal(schema.properties.vehicle, undefined);
+      assert.equal(schema.properties.confidence, undefined);
+      assert.equal(schema.properties.hypotheses.items.properties.likelihood, undefined);
+      assert.equal(schema.properties.primaryFinding.maxLength, 320);
+      assert.equal(request.reasoning.effort, 'low');
+    });
+  assert.equal(res.statusCode,200);
+  assert.equal(res.body.report.vehicle.make,'Toyota');
+  assert.match(res.body.report.technicianHandoff,/Chirp/);
+  assert.equal(res.body.report.schemaVersion,'2.0');
+});
