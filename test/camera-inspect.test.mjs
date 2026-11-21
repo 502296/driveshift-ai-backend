@@ -55,3 +55,47 @@ test('camera sees historical summaries separately and keeps a single original im
  const user=JSON.parse(x.payload.input[1].content[0].text);assert.equal(user.vehicleMemory.events[0].historical,true);assert.ok(!JSON.stringify(x.payload).includes('must-not-leak'));
  assert.equal(x.payload.input.flatMap(m=>m.content).filter(c=>c.type==='input_image').length,1);
 });
+
+
+test('rejects a discarded leading hypothesis even when a secondary hypothesis survives', async () => {
+ const r=clone();
+ r.diagnosis.hypotheses[0].supportingEvidenceIds=['VIS_OBS_999'];
+ r.diagnosis.hypotheses.push({...clone().diagnosis.hypotheses[0],id:'CAM_HYP_002',title:'Supported alternative'});
+ const x=await call(undefined,{raw:r});
+ assert.equal(x.output.statusCode,502);
+ assert.equal(x.output.payload.error.code,'CAMERA_CONTRACT_INVALID');
+});
+
+test('rejects partially invented hypothesis support instead of silently removing it', async () => {
+ const r=clone();r.diagnosis.hypotheses[0].supportingEvidenceIds.push('VIS_OBS_999');
+ const x=await call(undefined,{raw:r});
+ assert.equal(x.output.statusCode,502);
+ assert.equal(x.output.payload.error.code,'CAMERA_CONTRACT_INVALID');
+});
+
+test('rejects duplicate hypothesis IDs rather than showing a silently shortened diagnosis', async () => {
+ const r=clone();r.diagnosis.hypotheses.push({...r.diagnosis.hypotheses[0],title:'Different cause with the same ID'});
+ const x=await call(undefined,{raw:r});
+ assert.equal(x.output.statusCode,502);
+ assert.equal(x.output.payload.error.code,'CAMERA_CONTRACT_INVALID');
+});
+
+test('rejects missing or partially invented verification links', async () => {
+ for (const links of [['CAM_HYP_999'],['CAM_HYP_001','CAM_HYP_999']]) {
+  const r=clone();r.diagnosis.verificationSteps=[{id:'CAM_VER_001',description:'Verify the warning context.',relatedHypothesisIds:links}];
+  const x=await call(undefined,{raw:r});
+  assert.equal(x.output.statusCode,502);
+  assert.equal(x.output.payload.error.code,'CAMERA_CONTRACT_INVALID');
+ }
+});
+
+test('preserves two supported hypotheses and their shared verification step', async () => {
+ const r=clone();r.diagnosis.hypotheses[0].supportingEvidenceIds.push('VIS_OBS_001');
+ r.diagnosis.hypotheses.push({...clone().diagnosis.hypotheses[0],id:'CAM_HYP_002',title:'Alternative warning context'});
+ r.diagnosis.verificationSteps=[{id:'CAM_VER_001',description:'Confirm the operating context without starting the engine.',relatedHypothesisIds:['CAM_HYP_001','CAM_HYP_002']}];
+ const x=await call(undefined,{raw:r});
+ assert.equal(x.output.statusCode,200);
+ assert.deepEqual(x.output.payload.diagnosis.hypotheses.map(h=>h.id),['CAM_HYP_001','CAM_HYP_002']);
+ assert.deepEqual(x.output.payload.diagnosis.verificationSteps[0].relatedHypothesisIds,['CAM_HYP_001','CAM_HYP_002']);
+ assert.deepEqual(x.output.payload.diagnosis.hypotheses[0].supportingEvidenceIds,['VIS_OBS_001']);
+});
