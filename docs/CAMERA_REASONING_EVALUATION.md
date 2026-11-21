@@ -96,3 +96,25 @@ qualified automotive review, current Flutter/device/TestFlight acceptance and
 explicit owner approval are still required before any production promotion or
 Apple submission. The phone's currently configured immutable staging URL will
 not automatically switch to a newer deployment.
+
+## Live candidate checkpoint
+
+Candidate `4ff82cbece6982a0d1c4f1d958e72abd3adf1744` was exercised through the
+protected staging deployment `dpl_74LHScUgmg5mv5xD5SLqoMGnWYf4`. All 14 synthetic
+requests returned HTTP 200 and an explanation. Observed elapsed times were
+4.81–7.83 seconds (median 5.76 seconds) for this one small run, not a service
+latency baseline. Full synthetic inputs, responses and preliminary engineering
+review notes are in `camera-followup-live-candidate.json`. No semantic accuracy
+percentage is assigned and independent automotive review remains open.
+
+The candidate retained safety precautions, rejected unsupported identity and
+false precision, and adapted to a running-state correction in the sampled cases.
+The hypothetical-smoke answer's phrase "not an emergency" deserves expert
+calibration review; the absence of reported warning signs does not establish
+vehicle safety. No baseline/repeated-run comparison was performed.
+
+The owner explicitly authorized temporary staging access for this evaluation.
+The temporary link was revoked after the run, and Vercel confirmed its removal.
+Project SSO protection remained enabled. No credential is included in the
+fixtures, captured report or source. Production and the owner's existing
+phone-build URL were not changed by this evaluation.
