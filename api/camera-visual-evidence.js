@@ -1,3 +1,5 @@
+import {visualMechanicPrompt} from '../lib/camera/mechanic.js';
+import {normalizeWorkspace, normalizeVehicleContext, workspaceSchema, workspacePrompt, normalizeRecognition} from '../lib/camera/workspace.js';
 import { withTelemetry } from '../lib/admin/telemetry.js';
 // ============================================================
 // DriveShift Camera V2
@@ -385,12 +387,19 @@ async function handler(req, res) {
     // Build strict visual prompt
     // ========================================================
 
-    const prompt =
+    const workspace = normalizeWorkspace(body.cameraWorkspace);
+    const vehicle = normalizeVehicleContext(body.vehicleProfile);
+    const legacyPrompt =
       buildVisualEvidencePrompt({
         language,
         evidenceContext,
         allowedEvidenceIds,
-      });
+      }) + (workspace ? workspacePrompt(workspace, vehicle) : "") + `
+CONCISE OUTPUT: Prefer at most 5 distinct observations, 3 interpretations and 4 useful part identities. Keep descriptions to one short sentence, next-photo guidance to 35 words. Do not repeat the same uncertainty across fields. Retain every safety-critical finding even if these preferred counts are exceeded.
+`;
+
+    const prompt = workspace ? visualMechanicPrompt({language, evidence:evidenceContext,
+      vehicle, workspace, ids:allowedEvidenceIds}) : legacyPrompt;
 
     // ========================================================
     // Call OpenAI Responses API
@@ -480,12 +489,12 @@ async function handler(req, res) {
                     true,
 
                   schema:
-                    VISUAL_EVIDENCE_SCHEMA,
+                    workspace ? workspaceSchema(VISUAL_EVIDENCE_SCHEMA) : VISUAL_EVIDENCE_SCHEMA,
                 },
               },
 
               max_output_tokens:
-                2200,
+                workspace ? 3600 : 2200,
             }),
           }
         );
@@ -544,6 +553,7 @@ async function handler(req, res) {
     const openAiData =
       await response.json();
 
+    if (openAiData.status === 'incomplete') return sendError(res, 502, 'INCOMPLETE_CAMERA_VISUAL_EVIDENCE', 'The image inspection was incomplete. Try again.');
     const outputText =
       extractResponseText(
         openAiData
@@ -593,7 +603,7 @@ async function handler(req, res) {
 
     return res.status(200).json({
       ok: true,
-      visualEvidence,
+      visualEvidence: workspace ? {...visualEvidence, ...normalizeRecognition(parsed, visualEvidence.observations), workspaceVersion: 1} : visualEvidence,
     });
   } catch (error) {
     console.error(
@@ -2475,3 +2485,5 @@ function safeErrorMessage(
 }
 
 export default withTelemetry(handler, 'camera-visual-evidence');
+
+export {VISUAL_EVIDENCE_SCHEMA, normalizeLocalCameraEvidence, normalizeVisualEvidence, extractResponseText};
